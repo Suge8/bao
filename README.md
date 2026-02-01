@@ -286,3 +286,8 @@ nanobot/
 ## 🤝 Contribute
 
 PRs welcome! The codebase is intentionally small and readable.
+
+<p align="center">
+  <em> Thanks for visiting ✨ nanobot!</em><br><br>
+  <img src="https://visitor-badge.laobi.icu/badge?page_id=HKUDS.nanobot&style=for-the-badge&color=00d4ff" alt="Views">
+</p>
