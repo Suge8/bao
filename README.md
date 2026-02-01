@@ -34,10 +34,10 @@
 
 <table align="center">
   <tr align="center">
-    <th><p align="center">🔍 Web Search</p></th>
-    <th><p align="center">💻 Code & Files</p></th>
-    <th><p align="center">📅 Scheduled Tasks</p></th>
-    <th><p align="center">🧠 Memory</p></th>
+    <th><p align="center">📈 24/7 Real-Time Market Analysis</p></th>
+    <th><p align="center">🚀 Full-Stack Software Engineer</p></th>
+    <th><p align="center">📅 Your Daily Routine Manager</p></th>
+    <th><p align="center">📚 Personal Knowledge Assistant</p></th>
   </tr>
   <tr>
     <td align="center"><p align="center"><img src="case/search.gif" width="180" height="400"></p></td>
@@ -46,10 +46,10 @@
     <td align="center"><p align="center"><img src="case/memory.gif" width="180" height="400"></p></td>
   </tr>
   <tr>
-    <td align="center">📈 24/7 Real-Time Market Analysis</td>
-    <td align="center">🚀 Full-Stack Software Engineer</td>
-    <td align="center">📅 Your Daily Routine Manager</td>
-    <td align="center">📚 Personal Knowledge Assistant</td>
+    <td align="center">Discovery • Insights • Trends</td>
+    <td align="center">Develop • Deploy • Scale</td>
+    <td align="center">Schedule • Automate • Organize</td>
+    <td align="center">Learn • Memory • Reasoning</td>
   </tr>
 </table>
 
