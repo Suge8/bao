@@ -36,7 +36,7 @@
   <tr align="center">
     <th><p align="center">📈 24/7 Real-Time Market Analysis</p></th>
     <th><p align="center">🚀 Full-Stack Software Engineer</p></th>
-    <th><p align="center">📅 Your Daily Routine Manager</p></th>
+    <th><p align="center">📅 Smart Daily Routine Manager</p></th>
     <th><p align="center">📚 Personal Knowledge Assistant</p></th>
   </tr>
   <tr>
