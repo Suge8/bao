@@ -285,7 +285,7 @@ nanobot/
 
 ## 🤝 Contribute
 
-PRs welcome! The codebase is intentionally small and readable.
+PRs welcome! The codebase is intentionally small and readable. 🤗
 
 <p align="center">
   <em> Thanks for visiting ✨ nanobot!</em><br><br>
