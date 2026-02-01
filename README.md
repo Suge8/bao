@@ -74,7 +74,9 @@ pip install -e .
 ## 🚀 Quick Start
 
 > [!TIP]
-> Set your API key in `~/.nanobot/config.json`. Get one at [OpenRouter](https://openrouter.ai/keys).
+> Set your API key in `~/.nanobot/config.json`.
+> Get API keys: [OpenRouter](https://openrouter.ai/keys) (LLM) · [Brave Search](https://brave.com/search/api/) (optional, for web search)
+> You can also change the model to `minimax/minimax-m2` for lower cost.
 
 **1. Initialize**
 
@@ -102,9 +104,6 @@ nanobot onboard
 }
 ```
 
-> **Tip**: You can also change the model to `minimax/minimax-m2` for lower cost.
-
-> Get API keys: [OpenRouter](https://openrouter.ai/keys) (LLM) · [Brave Search](https://brave.com/search/api/) (optional, for web search)
 
 **3. Chat**
 
