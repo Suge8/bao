@@ -46,7 +46,7 @@
     <td align="center"><p align="center"><img src="case/memory.gif" width="180" height="400"></p></td>
   </tr>
   <tr>
-    <td align="center">Search real-time info</td>
+    <td align="center">📈 24/7 Real-Time Market Analysis</td>
     <td align="center">Read, write, execute</td>
     <td align="center">Cron jobs & reminders</td>
     <td align="center">Remember context</td>
