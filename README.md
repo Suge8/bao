@@ -269,11 +269,13 @@ nanobot/
 │   ├── context.py  #    Prompt builder
 │   ├── memory.py   #    Persistent memory
 │   ├── skills.py   #    Skills loader
-│   └── tools/      #    Built-in tools
+│   ├── subagent.py #    Background task execution
+│   └── tools/      #    Built-in tools (incl. spawn)
 ├── skills/         # 🎯 Bundled skills (github, weather, tmux...)
-├── channels/       # 📱 Telegram, WhatsApp
+├── channels/       # 📱 WhatsApp integration
 ├── bus/            # 🚌 Message routing
 ├── cron/           # ⏰ Scheduled tasks
+├── heartbeat/      # 💓 Proactive wake-up
 ├── providers/      # 🤖 LLM providers (OpenRouter, etc.)
 ├── session/        # 💬 Conversation sessions
 ├── config/         # ⚙️ Configuration
