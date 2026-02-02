@@ -60,6 +60,12 @@
 
 ## 📦 Install
 
+**Install with [uv](https://github.com/astral-sh/uv)** (recommended for speed)
+
+```bash
+uv tool install nanobot-ai
+```
+
 **Install from PyPi**
 
 ```bash
