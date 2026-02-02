@@ -321,7 +321,11 @@ nanobot/
 └── cli/            # 🖥️ Commands
 ```
 
-## 🗺️ Roadmap
+## 🤝 Contribute & Roadmap
+
+PRs welcome! The codebase is intentionally small and readable. 🤗
+
+**Roadmap** — Pick an item and [open a PR](https://github.com/HKUDS/nanobot/pulls)!
 
 - [ ] **Multi-modal** — See and hear (images, voice, video)
 - [ ] **Long-term memory** — Never forget important context
@@ -329,11 +333,25 @@ nanobot/
 - [ ] **More integrations** — Discord, Slack, email, calendar
 - [ ] **Self-improvement** — Learn from feedback and mistakes
 
-**Want to help?** Pick an item and [open a PR](https://github.com/HKUDS/nanobot/pulls)!
+### Contributors
 
-## 🤝 Contribute
+<a href="https://github.com/HKUDS/nanobot/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=HKUDS/nanobot" />
+</a>
 
-PRs welcome! The codebase is intentionally small and readable. 🤗
+---
+
+## ⭐ Star History
+
+<div align="center">
+  <a href="https://star-history.com/#HKUDS/nanobot&Date">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=HKUDS/nanobot&type=Date&theme=dark" />
+      <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=HKUDS/nanobot&type=Date" />
+      <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=HKUDS/nanobot&type=Date" style="border-radius: 15px; box-shadow: 0 0 30px rgba(0, 217, 255, 0.3);" />
+    </picture>
+  </a>
+</div>
 
 <p align="center">
   <em> Thanks for visiting ✨ nanobot!</em><br><br>
