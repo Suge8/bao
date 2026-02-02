@@ -28,7 +28,7 @@ class ChannelsConfig(BaseModel):
 class AgentDefaults(BaseModel):
     """Default agent configuration."""
     workspace: str = "~/.nanobot/workspace"
-    model: str = "anthropic/claude-opus-4-5"
+    model: str = "glm-4.7-flash"
     max_tokens: int = 8192
     temperature: float = 0.7
     max_tool_iterations: int = 20
@@ -50,6 +50,7 @@ class ProvidersConfig(BaseModel):
     anthropic: ProviderConfig = Field(default_factory=ProviderConfig)
     openai: ProviderConfig = Field(default_factory=ProviderConfig)
     openrouter: ProviderConfig = Field(default_factory=ProviderConfig)
+    zhipu: ProviderConfig = Field(default_factory=ProviderConfig)
     vllm: ProviderConfig = Field(default_factory=ProviderConfig)
 
 
@@ -89,19 +90,22 @@ class Config(BaseSettings):
         return Path(self.agents.defaults.workspace).expanduser()
     
     def get_api_key(self) -> str | None:
-        """Get API key in priority order: OpenRouter > Anthropic > OpenAI > vLLM."""
+        """Get API key in priority order: OpenRouter > Anthropic > OpenAI > Zhipu > vLLM."""
         return (
             self.providers.openrouter.api_key or
             self.providers.anthropic.api_key or
             self.providers.openai.api_key or
+            self.providers.zhipu.api_key or
             self.providers.vllm.api_key or
             None
         )
     
     def get_api_base(self) -> str | None:
-        """Get API base URL if using OpenRouter or vLLM."""
+        """Get API base URL if using OpenRouter, Zhipu or vLLM."""
         if self.providers.openrouter.api_key:
             return self.providers.openrouter.api_base or "https://openrouter.ai/api/v1"
+        if self.providers.zhipu.api_key:
+            return self.providers.zhipu.api_base
         if self.providers.vllm.api_base:
             return self.providers.vllm.api_base
         return None
