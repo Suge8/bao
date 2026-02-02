@@ -506,6 +506,7 @@ def cron_add(
     at: str = typer.Option(None, "--at", help="Run once at time (ISO format)"),
     deliver: bool = typer.Option(False, "--deliver", "-d", help="Deliver response to channel"),
     to: str = typer.Option(None, "--to", help="Recipient for delivery"),
+    channel: str = typer.Option(None, "--channel", help="Channel for delivery (e.g. 'telegram', 'whatsapp')"),
 ):
     """Add a scheduled job."""
     from nanobot.config.loader import get_data_dir
@@ -534,6 +535,7 @@ def cron_add(
         message=message,
         deliver=deliver,
         to=to,
+        channel=channel,
     )
     
     console.print(f"[green]✓[/green] Added job '{job.name}' ({job.id})")
