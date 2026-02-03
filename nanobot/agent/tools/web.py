@@ -31,30 +31,16 @@ def _normalize(text: str) -> str:
 
 
 def _validate_url(url: str) -> tuple[bool, str]:
-    """
-    Validate URL for security.
-
-    Returns:
-        (is_valid, error_message): Tuple of validation result and error message if invalid.
-    """
+    """Validate URL: must be http(s) with valid domain."""
     try:
-        parsed = urlparse(url)
-
-        # Check if scheme exists
-        if not parsed.scheme:
-            return False, "URL must include a scheme (http:// or https://)"
-
-        # Only allow http and https schemes
-        if parsed.scheme.lower() not in ('http', 'https'):
-            return False, f"Invalid URL scheme '{parsed.scheme}'. Only http:// and https:// are allowed"
-
-        # Check if netloc (domain) exists
-        if not parsed.netloc:
-            return False, "URL must include a valid domain"
-
+        p = urlparse(url)
+        if p.scheme not in ('http', 'https'):
+            return False, f"Only http/https allowed, got '{p.scheme or 'none'}'"
+        if not p.netloc:
+            return False, "Missing domain"
         return True, ""
     except Exception as e:
-        return False, f"Invalid URL format: {str(e)}"
+        return False, str(e)
 
 
 class WebSearchTool(Tool):
