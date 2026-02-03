@@ -247,6 +247,20 @@ nanobot gateway
 
 ## ⚙️ Configuration
 
+Config file: `~/.nanobot/config.json`
+
+### Providers
+
+| Provider | Purpose | Get API Key |
+|----------|---------|-------------|
+| `openrouter` | LLM (recommended, access to all models) | [openrouter.ai](https://openrouter.ai) |
+| `anthropic` | LLM (Claude direct) | [console.anthropic.com](https://console.anthropic.com) |
+| `openai` | LLM (GPT direct) | [platform.openai.com](https://platform.openai.com) |
+| `groq` | LLM + **Voice transcription** (Whisper) | [console.groq.com](https://console.groq.com) |
+| `gemini` | LLM (Gemini direct) | [aistudio.google.com](https://aistudio.google.com) |
+
+> **Note**: Groq provides free voice transcription via Whisper. If configured, Telegram voice messages will be automatically transcribed.
+
 <details>
 <summary><b>Full config example</b></summary>
 
@@ -260,6 +274,9 @@ nanobot gateway
   "providers": {
     "openrouter": {
       "apiKey": "sk-or-v1-xxx"
+    },
+    "groq": {
+      "apiKey": "gsk_xxx"
     }
   },
   "channels": {
@@ -312,6 +329,30 @@ nanobot cron remove <job_id>
 ```
 
 </details>
+
+## 🐳 Docker
+
+Build and run nanobot in a container:
+
+```bash
+# Build the image
+docker build -t nanobot .
+
+# Initialize config (first time only)
+docker run -v ~/.nanobot:/root/.nanobot --rm nanobot onboard
+
+# Edit config on host to add API keys
+vim ~/.nanobot/config.json
+
+# Run gateway (connects to Telegram/WhatsApp)
+docker run -v ~/.nanobot:/root/.nanobot -p 18790:18790 nanobot gateway
+
+# Or run a single command
+docker run -v ~/.nanobot:/root/.nanobot --rm nanobot agent -m "Hello!"
+docker run -v ~/.nanobot:/root/.nanobot --rm nanobot status
+```
+
+> **Tip**: Mount `~/.nanobot` so your config and workspace persist across container restarts.
 
 ## 📁 Project Structure
 
