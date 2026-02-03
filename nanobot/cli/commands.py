@@ -178,11 +178,13 @@ def gateway(
     # Create components
     bus = MessageBus()
     
-    # Create provider (supports OpenRouter, Anthropic, OpenAI)
+    # Create provider (supports OpenRouter, Anthropic, OpenAI, Bedrock)
     api_key = config.get_api_key()
     api_base = config.get_api_base()
-    
-    if not api_key:
+    model = config.agents.defaults.model
+    is_bedrock = model.startswith("bedrock/")
+
+    if not api_key and not is_bedrock:
         console.print("[red]Error: No API key configured.[/red]")
         console.print("Set one in ~/.nanobot/config.json under providers.openrouter.apiKey")
         raise typer.Exit(1)
@@ -289,11 +291,13 @@ def agent(
     
     api_key = config.get_api_key()
     api_base = config.get_api_base()
-    
-    if not api_key:
+    model = config.agents.defaults.model
+    is_bedrock = model.startswith("bedrock/")
+
+    if not api_key and not is_bedrock:
         console.print("[red]Error: No API key configured.[/red]")
         raise typer.Exit(1)
-    
+
     bus = MessageBus()
     provider = LiteLLMProvider(
         api_key=api_key,
@@ -348,26 +352,20 @@ app.add_typer(channels_app, name="channels")
 def channels_status():
     """Show channel status."""
     from nanobot.config.loader import load_config
-    
+
     config = load_config()
-    
+
     table = Table(title="Channel Status")
     table.add_column("Channel", style="cyan")
     table.add_column("Enabled", style="green")
-    table.add_column("Bridge URL", style="yellow")
-    
+    table.add_column("Configuration", style="yellow")
+
+    # WhatsApp
     wa = config.channels.whatsapp
     table.add_row(
         "WhatsApp",
         "✓" if wa.enabled else "✗",
         wa.bridge_url
-    )
-
-    tg = config.channels.telegram
-    table.add_row(
-        "Telegram",
-        "✓" if tg.enabled else "✗",
-        "polling"
     )
 
     dc = config.channels.discord
@@ -377,6 +375,15 @@ def channels_status():
         dc.gateway_url
     )
     
+    # Telegram
+    tg = config.channels.telegram
+    tg_config = f"token: {tg.token[:10]}..." if tg.token else "[dim]not configured[/dim]"
+    table.add_row(
+        "Telegram",
+        "✓" if tg.enabled else "✗",
+        tg_config
+    )
+
     console.print(table)
 
 
@@ -520,6 +527,7 @@ def cron_add(
     at: str = typer.Option(None, "--at", help="Run once at time (ISO format)"),
     deliver: bool = typer.Option(False, "--deliver", "-d", help="Deliver response to channel"),
     to: str = typer.Option(None, "--to", help="Recipient for delivery"),
+    channel: str = typer.Option(None, "--channel", help="Channel for delivery (e.g. 'telegram', 'whatsapp')"),
 ):
     """Add a scheduled job."""
     from nanobot.config.loader import get_data_dir
@@ -548,6 +556,7 @@ def cron_add(
         message=message,
         deliver=deliver,
         to=to,
+        channel=channel,
     )
     
     console.print(f"[green]✓[/green] Added job '{job.name}' ({job.id})")
