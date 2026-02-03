@@ -251,6 +251,9 @@ Config file: `~/.nanobot/config.json`
 
 ### Providers
 
+> [!NOTE]
+> Groq provides free voice transcription via Whisper. If configured, Telegram voice messages will be automatically transcribed.
+
 | Provider | Purpose | Get API Key |
 |----------|---------|-------------|
 | `openrouter` | LLM (recommended, access to all models) | [openrouter.ai](https://openrouter.ai) |
@@ -259,7 +262,6 @@ Config file: `~/.nanobot/config.json`
 | `groq` | LLM + **Voice transcription** (Whisper) | [console.groq.com](https://console.groq.com) |
 | `gemini` | LLM (Gemini direct) | [aistudio.google.com](https://aistudio.google.com) |
 
-> **Note**: Groq provides free voice transcription via Whisper. If configured, Telegram voice messages will be automatically transcribed.
 
 <details>
 <summary><b>Full config example</b></summary>
@@ -332,6 +334,9 @@ nanobot cron remove <job_id>
 
 ## 🐳 Docker
 
+> [!TIP]
+> The `-v ~/.nanobot:/root/.nanobot` flag mounts your local config directory into the container, so your config and workspace persist across container restarts.
+
 Build and run nanobot in a container:
 
 ```bash
@@ -351,8 +356,6 @@ docker run -v ~/.nanobot:/root/.nanobot -p 18790:18790 nanobot gateway
 docker run -v ~/.nanobot:/root/.nanobot --rm nanobot agent -m "Hello!"
 docker run -v ~/.nanobot:/root/.nanobot --rm nanobot status
 ```
-
-> **Tip**: Mount `~/.nanobot` so your config and workspace persist across container restarts.
 
 ## 📁 Project Structure
 
