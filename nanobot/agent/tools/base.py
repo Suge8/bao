@@ -12,6 +12,15 @@ class Tool(ABC):
     the environment, such as reading files, executing commands, etc.
     """
     
+    _TYPE_MAP = {
+        "string": str,
+        "integer": int,
+        "number": (int, float),
+        "boolean": bool,
+        "array": list,
+        "object": dict,
+    }
+    
     @property
     @abstractmethod
     def name(self) -> str:
@@ -65,60 +74,40 @@ class Tool(ABC):
     def _validate_schema(self, value: Any, schema: dict[str, Any], path: str) -> list[str]:
         errors: list[str] = []
         expected_type = schema.get("type")
+        label = path or "parameter"
 
-        type_map = {
-            "string": str,
-            "integer": int,
-            "number": (int, float),
-            "boolean": bool,
-            "array": list,
-            "object": dict,
-        }
-
-        def label(p: str) -> str:
-            return p or "parameter"
-
-        if expected_type in type_map and not isinstance(value, type_map[expected_type]):
-            errors.append(f"{label(path)} should be {expected_type}")
-            return errors
+        if expected_type in self._TYPE_MAP and not isinstance(value, self._TYPE_MAP[expected_type]):
+            return [f"{label} should be {expected_type}"]
 
         if "enum" in schema and value not in schema["enum"]:
-            errors.append(f"{label(path)} must be one of {schema['enum']}")
+            errors.append(f"{label} must be one of {schema['enum']}")
 
         if expected_type in ("integer", "number"):
             if "minimum" in schema and value < schema["minimum"]:
-                errors.append(f"{label(path)} must be >= {schema['minimum']}")
+                errors.append(f"{label} must be >= {schema['minimum']}")
             if "maximum" in schema and value > schema["maximum"]:
-                errors.append(f"{label(path)} must be <= {schema['maximum']}")
+                errors.append(f"{label} must be <= {schema['maximum']}")
 
         if expected_type == "string":
             if "minLength" in schema and len(value) < schema["minLength"]:
-                errors.append(f"{label(path)} must be at least {schema['minLength']} chars")
+                errors.append(f"{label} must be at least {schema['minLength']} chars")
             if "maxLength" in schema and len(value) > schema["maxLength"]:
-                errors.append(f"{label(path)} must be at most {schema['maxLength']} chars")
+                errors.append(f"{label} must be at most {schema['maxLength']} chars")
 
         if expected_type == "object":
-            properties = schema.get("properties", {}) or {}
-            required = set(schema.get("required", []) or [])
-
-            for key in required:
+            properties = schema.get("properties", {})
+            for key in schema.get("required", []):
                 if key not in value:
-                    p = f"{path}.{key}" if path else key
-                    errors.append(f"missing required {p}")
-
+                    errors.append(f"missing required {path}.{key}" if path else f"missing required {key}")
             for key, item in value.items():
-                prop_schema = properties.get(key)
-                if not prop_schema:
-                    continue  # ignore unknown fields
-                p = f"{path}.{key}" if path else key
-                errors.extend(self._validate_schema(item, prop_schema, p))
+                if key in properties:
+                    errors.extend(self._validate_schema(item, properties[key], f"{path}.{key}" if path else key))
 
         if expected_type == "array":
             items_schema = schema.get("items")
             if items_schema:
                 for idx, item in enumerate(value):
-                    p = f"{path}[{idx}]" if path else f"[{idx}]"
-                    errors.extend(self._validate_schema(item, items_schema, p))
+                    errors.extend(self._validate_schema(item, items_schema, f"{path}[{idx}]" if path else f"[{idx}]"))
 
         return errors
     

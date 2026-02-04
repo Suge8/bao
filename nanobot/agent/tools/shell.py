@@ -18,29 +18,22 @@ class ExecTool(Tool):
         working_dir: str | None = None,
         deny_patterns: list[str] | None = None,
         allow_patterns: list[str] | None = None,
-        restrict_to_working_dir: bool = False,
+        restrict_to_workspace: bool = False,
     ):
         self.timeout = timeout
         self.working_dir = working_dir
         self.deny_patterns = deny_patterns or [
-            r"\brm\s+-rf\b",
-            r"\brm\s+-fr\b",
-            r"\brm\s+-r\b",
-            r"\bdel\s+/f\b",
-            r"\bdel\s+/q\b",
-            r"\brmdir\s+/s\b",
-            r"\bformat\b",
-            r"\bmkfs\b",
-            r"\bdd\s+if=",
-            r">\s*/dev/sd",
-            r"\bdiskpart\b",
-            r"\bshutdown\b",
-            r"\breboot\b",
-            r"\bpoweroff\b",
-            r":\(\)\s*\{\s*:\s*\|\s*:\s*&\s*\};\s*:",
+            r"\brm\s+-[rf]{1,2}\b",          # rm -r, rm -rf, rm -fr
+            r"\bdel\s+/[fq]\b",              # del /f, del /q
+            r"\brmdir\s+/s\b",               # rmdir /s
+            r"\b(format|mkfs|diskpart)\b",   # disk operations
+            r"\bdd\s+if=",                   # dd
+            r">\s*/dev/sd",                  # write to disk
+            r"\b(shutdown|reboot|poweroff)\b",  # system power
+            r":\(\)\s*\{.*\};\s*:",          # fork bomb
         ]
         self.allow_patterns = allow_patterns or []
-        self.restrict_to_working_dir = restrict_to_working_dir
+        self.restrict_to_workspace = restrict_to_workspace
     
     @property
     def name(self) -> str:
@@ -128,14 +121,14 @@ class ExecTool(Tool):
             if not any(re.search(p, lower) for p in self.allow_patterns):
                 return "Error: Command blocked by safety guard (not in allowlist)"
 
-        if self.restrict_to_working_dir:
+        if self.restrict_to_workspace:
             if "..\\" in cmd or "../" in cmd:
                 return "Error: Command blocked by safety guard (path traversal detected)"
 
             cwd_path = Path(cwd).resolve()
 
             win_paths = re.findall(r"[A-Za-z]:\\[^\\\"']+", cmd)
-            posix_paths = re.findall(r"/[^\\s\"']+", cmd)
+            posix_paths = re.findall(r"/[^\s\"']+", cmd)
 
             for raw in win_paths + posix_paths:
                 try:
