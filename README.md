@@ -18,12 +18,18 @@
 
 ## 📢 News
 
+<<<<<<< main
 - **2025-02-03** 🔒 Security audit completed! See [SECURITY_AUDIT.md](./SECURITY_AUDIT.md) and [SECURITY.md](./SECURITY.md) for details.
 - **2025-02-01** 🎉 nanobot launched! Welcome to try 🐈 nanobot!
 
 > [!IMPORTANT]
 > **Security Notice**: If you're using nanobot in production, please review [SECURITY.md](./SECURITY.md) for security best practices.
 > Key actions: Configure `allowFrom` lists, secure your API keys, and keep dependencies updated.
+=======
+- **2026-02-05** ✨ Added Feishu channel, DeepSeek provider, and better scheduled tasks support!
+- **2026-02-04** 🚀 v0.1.3.post4 released with multi-provider & Docker support! Check [release notes](https://github.com/HKUDS/nanobot/releases/tag/v0.1.3.post4) for details.
+- **2026-02-02** 🎉 nanobot launched! Welcome to try 🐈 nanobot!
+>>>>>>> main
 
 ## Key Features of nanobot:
 
@@ -33,7 +39,7 @@
 
 ⚡️ **Lightning Fast**: Minimal footprint means faster startup, lower resource usage, and quicker iterations.
 
-💎 **Easy-to-Use**: One-click to depoly and you're ready to go.
+💎 **Easy-to-Use**: One-click to deploy and you're ready to go.
 
 ## 🏗️ Architecture
 
