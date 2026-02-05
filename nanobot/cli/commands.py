@@ -1,4 +1,4 @@
-"""CLI commands for nanobot."""
+﻿"""CLI commands for nanobot."""
 
 import asyncio
 from pathlib import Path
@@ -667,6 +667,7 @@ def cron_run(
 def status():
     """Show nanobot status."""
     from nanobot.config.loader import load_config, get_config_path
+    from nanobot.auth.codex import get_codex_token
 
     config_path = get_config_path()
     config = load_config()
@@ -694,6 +695,12 @@ def status():
         vllm_status = f"[green]�?{config.providers.vllm.api_base}[/green]" if has_vllm else "[dim]not set[/dim]"
         console.print(f"vLLM/Local: {vllm_status}")
 
+        try:
+            _ = get_codex_token()
+            codex_status = "[green]logged in[/green]"
+        except Exception:
+            codex_status = "[dim]not logged in[/dim]"
+        console.print(f"Codex Login: {codex_status}")
 
 if __name__ == "__main__":
     app()
