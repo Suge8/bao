@@ -179,6 +179,7 @@ def gateway(
     from nanobot.bus.queue import MessageBus
     from nanobot.agent.loop import AgentLoop
     from nanobot.channels.manager import ChannelManager
+    from nanobot.session.manager import SessionManager
     from nanobot.cron.service import CronService
     from nanobot.cron.types import CronJob
     from nanobot.heartbeat.service import HeartbeatService
@@ -192,6 +193,7 @@ def gateway(
     config = load_config()
     bus = MessageBus()
     provider = _make_provider(config)
+    session_manager = SessionManager(config.workspace_path)
     
     # Create cron service first (callback set after agent creation)
     cron_store_path = get_data_dir() / "cron" / "jobs.json"
@@ -208,6 +210,7 @@ def gateway(
         exec_config=config.tools.exec,
         cron_service=cron,
         restrict_to_workspace=config.tools.restrict_to_workspace,
+        session_manager=session_manager,
     )
     
     # Set cron callback (needs agent)
@@ -242,7 +245,7 @@ def gateway(
     )
     
     # Create channel manager
-    channels = ChannelManager(config, bus)
+    channels = ChannelManager(config, bus, session_manager=session_manager)
     
     if channels.enabled_channels:
         console.print(f"[green]✓[/green] Channels enabled: {', '.join(channels.enabled_channels)}")
