@@ -3,6 +3,7 @@
 import asyncio
 import atexit
 import os
+import signal
 from pathlib import Path
 import select
 import sys
@@ -29,6 +30,7 @@ _READLINE = None
 _HISTORY_FILE: Path | None = None
 _HISTORY_HOOK_REGISTERED = False
 _USING_LIBEDIT = False
+_SAVED_TERM_ATTRS = None  # original termios settings, restored on exit
 
 
 def _flush_pending_tty_input() -> None:
@@ -67,9 +69,27 @@ def _save_history() -> None:
         return
 
 
+def _restore_terminal() -> None:
+    """Restore terminal to its original state (echo, line buffering, etc.)."""
+    if _SAVED_TERM_ATTRS is None:
+        return
+    try:
+        import termios
+        termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, _SAVED_TERM_ATTRS)
+    except Exception:
+        pass
+
+
 def _enable_line_editing() -> None:
     """Enable readline for arrow keys, line editing, and persistent history."""
-    global _READLINE, _HISTORY_FILE, _HISTORY_HOOK_REGISTERED, _USING_LIBEDIT
+    global _READLINE, _HISTORY_FILE, _HISTORY_HOOK_REGISTERED, _USING_LIBEDIT, _SAVED_TERM_ATTRS
+
+    # Save terminal state before readline touches it
+    try:
+        import termios
+        _SAVED_TERM_ATTRS = termios.tcgetattr(sys.stdin.fileno())
+    except Exception:
+        pass
 
     history_file = Path.home() / ".nanobot" / "history" / "cli_history"
     history_file.parent.mkdir(parents=True, exist_ok=True)
@@ -421,6 +441,16 @@ def agent(
         # Interactive mode
         _enable_line_editing()
         console.print(f"{__logo__} Interactive mode (Ctrl+C to exit)\n")
+
+        # input() runs in a worker thread that can't be cancelled.
+        # Without this handler, asyncio.run() would hang waiting for it.
+        def _exit_on_sigint(signum, frame):
+            _save_history()
+            _restore_terminal()
+            console.print("\nGoodbye!")
+            os._exit(0)
+
+        signal.signal(signal.SIGINT, _exit_on_sigint)
         
         async def run_interactive():
             while True:
@@ -433,6 +463,8 @@ def agent(
                     response = await agent_loop.process_direct(user_input, session_id)
                     console.print(f"\n{__logo__} {response}\n")
                 except KeyboardInterrupt:
+                    _save_history()
+                    _restore_terminal()
                     console.print("\nGoodbye!")
                     break
         
