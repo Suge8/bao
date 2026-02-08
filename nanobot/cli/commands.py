@@ -1,6 +1,7 @@
 ﻿"""CLI commands for nanobot."""
 
 import asyncio
+import sys
 from pathlib import Path
 
 import typer
@@ -16,6 +17,12 @@ app = typer.Typer(
 )
 
 console = Console()
+
+
+def _safe_print(text: str) -> None:
+    encoding = sys.stdout.encoding or "utf-8"
+    safe_text = text.encode(encoding, errors="replace").decode(encoding, errors="replace")
+    console.print(safe_text)
 
 
 def version_callback(value: bool):
@@ -82,7 +89,7 @@ def login(
         console.print(f"[red]Unsupported provider: {provider}[/red]")
         raise typer.Exit(1)
 
-    from nanobot.auth.codex import login_codex_oauth_interactive
+    from oauth_cli_kit import login_oauth_interactive as login_codex_oauth_interactive
 
     console.print("[green]Starting OpenAI Codex OAuth login...[/green]")
     login_codex_oauth_interactive(
@@ -180,7 +187,7 @@ def gateway(
     from nanobot.bus.queue import MessageBus
     from nanobot.providers.litellm_provider import LiteLLMProvider
     from nanobot.providers.openai_codex_provider import OpenAICodexProvider
-    from nanobot.auth.codex import get_codex_token
+    from oauth_cli_kit import get_token as get_codex_token
     from nanobot.agent.loop import AgentLoop
     from nanobot.channels.manager import ChannelManager
     from nanobot.cron.service import CronService
@@ -316,7 +323,7 @@ def agent(
     from nanobot.bus.queue import MessageBus
     from nanobot.providers.litellm_provider import LiteLLMProvider
     from nanobot.providers.openai_codex_provider import OpenAICodexProvider
-    from nanobot.auth.codex import get_codex_token
+    from oauth_cli_kit import get_token as get_codex_token
     from nanobot.agent.loop import AgentLoop
     
     config = load_config()
@@ -361,7 +368,7 @@ def agent(
         # Single message mode
         async def run_once():
             response = await agent_loop.process_direct(message, session_id)
-            console.print(f"\n{__logo__} {response}")
+            _safe_print(f"\n{__logo__} {response}")
         
         asyncio.run(run_once())
     else:
@@ -376,7 +383,7 @@ def agent(
                         continue
                     
                     response = await agent_loop.process_direct(user_input, session_id)
-                    console.print(f"\n{__logo__} {response}\n")
+                    _safe_print(f"\n{__logo__} {response}\n")
                 except KeyboardInterrupt:
                     console.print("\nGoodbye!")
                     break
@@ -667,7 +674,7 @@ def cron_run(
 def status():
     """Show nanobot status."""
     from nanobot.config.loader import load_config, get_config_path
-    from nanobot.auth.codex import get_codex_token
+    from oauth_cli_kit import get_token as get_codex_token
 
     config_path = get_config_path()
     config = load_config()
@@ -704,4 +711,3 @@ def status():
 
 if __name__ == "__main__":
     app()
-

@@ -9,7 +9,7 @@ from typing import Any, AsyncGenerator
 
 import httpx
 
-from nanobot.auth.codex import get_codex_token
+from oauth_cli_kit import get_token as get_codex_token
 from nanobot.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 
 DEFAULT_CODEX_BASE_URL = "https://chatgpt.com/backend-api"
