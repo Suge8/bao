@@ -199,7 +199,9 @@ Talk to your nanobot through Telegram, Discord, WhatsApp, Feishu, DingTalk, or E
 }
 ```
 
-> Get your user ID from `@userinfobot` on Telegram.
+> You can find your **User ID** in Telegram settings. It is shown as `@yourUserId`.
+> Copy this value **without the `@` symbol** and paste it into the config file.
+
 
 **3. Run**
 
