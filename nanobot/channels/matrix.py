@@ -18,6 +18,8 @@ from nanobot.bus.events import OutboundMessage
 from nanobot.channels.base import BaseChannel
 from nanobot.config.loader import get_data_dir
 
+LOGGING_STACK_BASE_DEPTH = 2
+
 
 class _NioLoguruHandler(logging.Handler):
     """Route stdlib logging records from matrix-nio into Loguru output."""
@@ -29,7 +31,8 @@ class _NioLoguruHandler(logging.Handler):
             level = record.levelno
 
         frame = logging.currentframe()
-        depth = 2
+        # Skip logging internals plus this handler frame when forwarding to Loguru.
+        depth = LOGGING_STACK_BASE_DEPTH
         while frame and frame.f_code.co_filename == logging.__file__:
             frame = frame.f_back
             depth += 1
