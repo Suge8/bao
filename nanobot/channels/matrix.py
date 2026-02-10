@@ -266,18 +266,55 @@ class MatrixChannel(BaseChannel):
 
         await self.client.join(room.room_id)
 
+    def _is_direct_room(self, room: MatrixRoom) -> bool:
+        """Return True if the room behaves like a DM (2 or fewer members)."""
+        member_count = getattr(room, "member_count", None)
+        return isinstance(member_count, int) and member_count <= 2
+
+    def _is_bot_mentioned_from_mx_mentions(self, event: RoomMessageText) -> bool:
+        """Resolve mentions strictly from Matrix-native m.mentions payload."""
+        source = getattr(event, "source", None)
+        if not isinstance(source, dict):
+            return False
+
+        content = source.get("content")
+        if not isinstance(content, dict):
+            return False
+
+        mentions = content.get("m.mentions")
+        if not isinstance(mentions, dict):
+            return False
+
+        user_ids = mentions.get("user_ids")
+        if isinstance(user_ids, list) and self.config.user_id in user_ids:
+            return True
+
+        return bool(self.config.allow_room_mentions and mentions.get("room") is True)
+
+    def _should_process_message(self, room: MatrixRoom, event: RoomMessageText) -> bool:
+        """Apply sender and room policy checks before processing Matrix messages."""
+        if not self.is_allowed(event.sender):
+            return False
+
+        if self._is_direct_room(room):
+            return True
+
+        policy = self.config.group_policy
+        if policy == "open":
+            return True
+        if policy == "allowlist":
+            return room.room_id in (self.config.group_allow_from or [])
+        if policy == "mention":
+            return self._is_bot_mentioned_from_mx_mentions(event)
+
+        return False
+
     async def _on_message(self, room: MatrixRoom, event: RoomMessageText) -> None:
         # Ignore self messages
         if event.sender == self.config.user_id:
             return
 
-        if not self.is_allowed(event.sender):
-            await self._handle_message(
-                sender_id=event.sender,
-                chat_id=room.room_id,
-                content=event.body,
-                metadata={"room": room.display_name},
-            )
+        if not self._should_process_message(room, event):
             return
 
         await self._set_typing(room.room_id, True)
@@ -286,7 +323,7 @@ class MatrixChannel(BaseChannel):
                 sender_id=event.sender,
                 chat_id=room.room_id,
                 content=event.body,
-                metadata={"room": room.display_name},
+                metadata={"room": getattr(room, "display_name", room.room_id)},
             )
         except Exception:
             await self._set_typing(room.room_id, False)
