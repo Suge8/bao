@@ -74,6 +74,8 @@ class MatrixConfig(Base):
     device_id: str = ""
     # Max seconds to wait for sync_forever to stop gracefully before cancellation fallback.
     sync_stop_grace_seconds: int = 2
+    # Max attachment size accepted from inbound Matrix media events.
+    max_inbound_media_bytes: int = 20 * 1024 * 1024
     allow_from: list[str] = Field(default_factory=list)
     group_policy: Literal["open", "mention", "allowlist"] = "open"
     group_allow_from: list[str] = Field(default_factory=list)

@@ -1,3 +1,4 @@
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -43,6 +44,11 @@ class _FakeAsyncClient:
         self.response_callbacks: list[tuple[object, object]] = []
         self.room_send_calls: list[dict[str, object]] = []
         self.typing_calls: list[tuple[str, bool, int]] = []
+        self.download_calls: list[dict[str, object]] = []
+        self.download_response: object | None = None
+        self.download_bytes: bytes = b"media"
+        self.download_content_type: str = "application/octet-stream"
+        self.download_filename: str | None = None
         self.raise_on_send = False
         self.raise_on_typing = False
 
@@ -89,6 +95,16 @@ class _FakeAsyncClient:
         if self.raise_on_typing:
             raise RuntimeError("typing failed")
 
+    async def download(self, **kwargs):
+        self.download_calls.append(kwargs)
+        if self.download_response is not None:
+            return self.download_response
+        return matrix_module.MemoryDownloadResponse(
+            body=self.download_bytes,
+            content_type=self.download_content_type,
+            filename=self.download_filename,
+        )
+
     async def close(self) -> None:
         return None
 
@@ -133,6 +149,7 @@ async def test_start_skips_load_store_when_device_id_missing(
 
     assert len(clients) == 1
     assert clients[0].load_store_called is False
+    assert len(clients[0].callbacks) == 3
     assert len(clients[0].response_callbacks) == 3
 
     await channel.stop()
@@ -372,6 +389,212 @@ async def test_on_message_room_mention_requires_opt_in() -> None:
     await channel._on_message(room, room_mention_event)
     assert handled == ["@alice:matrix.org"]
     assert client.typing_calls == [("!room:matrix.org", True, TYPING_NOTICE_TIMEOUT_MS)]
+
+
+@pytest.mark.asyncio
+async def test_on_media_message_downloads_attachment_and_sets_metadata(
+    monkeypatch, tmp_path
+) -> None:
+    monkeypatch.setattr("nanobot.channels.matrix.get_data_dir", lambda: tmp_path)
+
+    channel = MatrixChannel(_make_config(), MessageBus())
+    client = _FakeAsyncClient("", "", "", None)
+    client.download_bytes = b"image"
+    channel.client = client
+
+    handled: list[dict[str, object]] = []
+
+    async def _fake_handle_message(**kwargs) -> None:
+        handled.append(kwargs)
+
+    channel._handle_message = _fake_handle_message  # type: ignore[method-assign]
+
+    room = SimpleNamespace(room_id="!room:matrix.org", display_name="Test room", member_count=2)
+    event = SimpleNamespace(
+        sender="@alice:matrix.org",
+        body="photo.png",
+        url="mxc://example.org/mediaid",
+        event_id="$event1",
+        source={
+            "content": {
+                "msgtype": "m.image",
+                "info": {"mimetype": "image/png", "size": 5},
+            }
+        },
+    )
+
+    await channel._on_media_message(room, event)
+
+    assert len(client.download_calls) == 1
+    assert len(handled) == 1
+    assert client.typing_calls == [("!room:matrix.org", True, TYPING_NOTICE_TIMEOUT_MS)]
+
+    media_paths = handled[0]["media"]
+    assert isinstance(media_paths, list) and len(media_paths) == 1
+    media_path = Path(media_paths[0])
+    assert media_path.is_file()
+    assert media_path.read_bytes() == b"image"
+
+    metadata = handled[0]["metadata"]
+    attachments = metadata["attachments"]
+    assert isinstance(attachments, list) and len(attachments) == 1
+    assert attachments[0]["type"] == "image"
+    assert attachments[0]["mxc_url"] == "mxc://example.org/mediaid"
+    assert attachments[0]["path"] == str(media_path)
+    assert "[attachment: " in handled[0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_on_media_message_respects_declared_size_limit(
+    monkeypatch, tmp_path
+) -> None:
+    monkeypatch.setattr("nanobot.channels.matrix.get_data_dir", lambda: tmp_path)
+
+    channel = MatrixChannel(_make_config(max_inbound_media_bytes=3), MessageBus())
+    client = _FakeAsyncClient("", "", "", None)
+    channel.client = client
+
+    handled: list[dict[str, object]] = []
+
+    async def _fake_handle_message(**kwargs) -> None:
+        handled.append(kwargs)
+
+    channel._handle_message = _fake_handle_message  # type: ignore[method-assign]
+
+    room = SimpleNamespace(room_id="!room:matrix.org", display_name="Test room", member_count=2)
+    event = SimpleNamespace(
+        sender="@alice:matrix.org",
+        body="large.bin",
+        url="mxc://example.org/large",
+        event_id="$event2",
+        source={"content": {"msgtype": "m.file", "info": {"size": 10}}},
+    )
+
+    await channel._on_media_message(room, event)
+
+    assert client.download_calls == []
+    assert len(handled) == 1
+    assert handled[0]["media"] == []
+    assert handled[0]["metadata"]["attachments"] == []
+    assert "[attachment: large.bin - too large]" in handled[0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_on_media_message_handles_download_error(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr("nanobot.channels.matrix.get_data_dir", lambda: tmp_path)
+
+    channel = MatrixChannel(_make_config(), MessageBus())
+    client = _FakeAsyncClient("", "", "", None)
+    client.download_response = matrix_module.DownloadError("download failed")
+    channel.client = client
+
+    handled: list[dict[str, object]] = []
+
+    async def _fake_handle_message(**kwargs) -> None:
+        handled.append(kwargs)
+
+    channel._handle_message = _fake_handle_message  # type: ignore[method-assign]
+
+    room = SimpleNamespace(room_id="!room:matrix.org", display_name="Test room", member_count=2)
+    event = SimpleNamespace(
+        sender="@alice:matrix.org",
+        body="photo.png",
+        url="mxc://example.org/mediaid",
+        event_id="$event3",
+        source={"content": {"msgtype": "m.image"}},
+    )
+
+    await channel._on_media_message(room, event)
+
+    assert len(client.download_calls) == 1
+    assert len(handled) == 1
+    assert handled[0]["media"] == []
+    assert handled[0]["metadata"]["attachments"] == []
+    assert "[attachment: photo.png - download failed]" in handled[0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_on_media_message_decrypts_encrypted_media(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr("nanobot.channels.matrix.get_data_dir", lambda: tmp_path)
+    monkeypatch.setattr(
+        matrix_module,
+        "decrypt_attachment",
+        lambda ciphertext, key, sha256, iv: b"plain",
+    )
+
+    channel = MatrixChannel(_make_config(), MessageBus())
+    client = _FakeAsyncClient("", "", "", None)
+    client.download_bytes = b"cipher"
+    channel.client = client
+
+    handled: list[dict[str, object]] = []
+
+    async def _fake_handle_message(**kwargs) -> None:
+        handled.append(kwargs)
+
+    channel._handle_message = _fake_handle_message  # type: ignore[method-assign]
+
+    room = SimpleNamespace(room_id="!room:matrix.org", display_name="Test room", member_count=2)
+    event = SimpleNamespace(
+        sender="@alice:matrix.org",
+        body="secret.txt",
+        url="mxc://example.org/encrypted",
+        event_id="$event4",
+        key={"k": "key"},
+        hashes={"sha256": "hash"},
+        iv="iv",
+        source={"content": {"msgtype": "m.file", "info": {"size": 6}}},
+    )
+
+    await channel._on_media_message(room, event)
+
+    assert len(handled) == 1
+    media_path = Path(handled[0]["media"][0])
+    assert media_path.read_bytes() == b"plain"
+    attachment = handled[0]["metadata"]["attachments"][0]
+    assert attachment["encrypted"] is True
+    assert attachment["size_bytes"] == 5
+
+
+@pytest.mark.asyncio
+async def test_on_media_message_handles_decrypt_error(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr("nanobot.channels.matrix.get_data_dir", lambda: tmp_path)
+
+    def _raise(*args, **kwargs):
+        raise matrix_module.EncryptionError("boom")
+
+    monkeypatch.setattr(matrix_module, "decrypt_attachment", _raise)
+
+    channel = MatrixChannel(_make_config(), MessageBus())
+    client = _FakeAsyncClient("", "", "", None)
+    client.download_bytes = b"cipher"
+    channel.client = client
+
+    handled: list[dict[str, object]] = []
+
+    async def _fake_handle_message(**kwargs) -> None:
+        handled.append(kwargs)
+
+    channel._handle_message = _fake_handle_message  # type: ignore[method-assign]
+
+    room = SimpleNamespace(room_id="!room:matrix.org", display_name="Test room", member_count=2)
+    event = SimpleNamespace(
+        sender="@alice:matrix.org",
+        body="secret.txt",
+        url="mxc://example.org/encrypted",
+        event_id="$event5",
+        key={"k": "key"},
+        hashes={"sha256": "hash"},
+        iv="iv",
+        source={"content": {"msgtype": "m.file"}},
+    )
+
+    await channel._on_media_message(room, event)
+
+    assert len(handled) == 1
+    assert handled[0]["media"] == []
+    assert handled[0]["metadata"]["attachments"] == []
+    assert "[attachment: secret.txt - download failed]" in handled[0]["content"]
 
 
 @pytest.mark.asyncio
