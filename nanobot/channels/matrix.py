@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from typing import Any
 
 from loguru import logger
@@ -18,6 +19,34 @@ from nanobot.channels.base import BaseChannel
 from nanobot.config.loader import get_data_dir
 
 
+class _NioLoguruHandler(logging.Handler):
+    """Route stdlib logging records from matrix-nio into Loguru output."""
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            level = logger.level(record.levelname).name
+        except ValueError:
+            level = record.levelno
+
+        frame = logging.currentframe()
+        depth = 2
+        while frame and frame.f_code.co_filename == logging.__file__:
+            frame = frame.f_back
+            depth += 1
+
+        logger.opt(depth=depth, exception=record.exc_info).log(level, record.getMessage())
+
+
+def _configure_nio_logging_bridge() -> None:
+    """Ensure matrix-nio logs are emitted through the project's Loguru format."""
+    nio_logger = logging.getLogger("nio")
+    if any(isinstance(handler, _NioLoguruHandler) for handler in nio_logger.handlers):
+        return
+
+    nio_logger.handlers = [_NioLoguruHandler()]
+    nio_logger.propagate = False
+
+
 class MatrixChannel(BaseChannel):
     """
     Matrix (Element) channel using long-polling sync.
@@ -33,6 +62,7 @@ class MatrixChannel(BaseChannel):
     async def start(self) -> None:
         """Start Matrix client and begin sync loop."""
         self._running = True
+        _configure_nio_logging_bridge()
 
         store_path = get_data_dir() / "matrix-store"
         store_path.mkdir(parents=True, exist_ok=True)
