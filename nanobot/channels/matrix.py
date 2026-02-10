@@ -11,6 +11,7 @@ from nio import (
     MatrixRoom,
     RoomMessageText,
     RoomSendError,
+    RoomTypingError,
     SyncError,
 )
 
@@ -19,6 +20,7 @@ from nanobot.channels.base import BaseChannel
 from nanobot.config.loader import get_data_dir
 
 LOGGING_STACK_BASE_DEPTH = 2
+TYPING_NOTICE_TIMEOUT_MS = 30_000
 
 
 class _NioLoguruHandler(logging.Handler):
@@ -135,12 +137,15 @@ class MatrixChannel(BaseChannel):
         if not self.client:
             return
 
-        await self.client.room_send(
-            room_id=msg.chat_id,
-            message_type="m.room.message",
-            content={"msgtype": "m.text", "body": msg.content},
-            ignore_unverified_devices=True,
-        )
+        try:
+            await self.client.room_send(
+                room_id=msg.chat_id,
+                message_type="m.room.message",
+                content={"msgtype": "m.text", "body": msg.content},
+                ignore_unverified_devices=True,
+            )
+        finally:
+            await self._set_typing(msg.chat_id, False)
 
     def _register_event_callbacks(self) -> None:
         """Register Matrix event callbacks used by this channel."""
@@ -179,6 +184,28 @@ class MatrixChannel(BaseChannel):
             return
         logger.warning("Matrix send warning: {}", response)
 
+    async def _set_typing(self, room_id: str, typing: bool) -> None:
+        """Best-effort typing indicator update that never blocks message flow."""
+        if not self.client:
+            return
+
+        try:
+            response = await self.client.room_typing(
+                room_id=room_id,
+                typing_state=typing,
+                timeout=TYPING_NOTICE_TIMEOUT_MS,
+            )
+            if isinstance(response, RoomTypingError):
+                logger.debug("Matrix typing update failed for room {}: {}", room_id, response)
+        except Exception as e:
+            logger.debug(
+                "Matrix typing update failed for room {} (typing={}): {}: {}",
+                room_id,
+                typing,
+                type(e).__name__,
+                str(e),
+            )
+
     async def _sync_loop(self) -> None:
         while self._running:
             try:
@@ -202,9 +229,23 @@ class MatrixChannel(BaseChannel):
         if event.sender == self.config.user_id:
             return
 
-        await self._handle_message(
-            sender_id=event.sender,
-            chat_id=room.room_id,
-            content=event.body,
-            metadata={"room": room.display_name},
-        )
+        if not self.is_allowed(event.sender):
+            await self._handle_message(
+                sender_id=event.sender,
+                chat_id=room.room_id,
+                content=event.body,
+                metadata={"room": room.display_name},
+            )
+            return
+
+        await self._set_typing(room.room_id, True)
+        try:
+            await self._handle_message(
+                sender_id=event.sender,
+                chat_id=room.room_id,
+                content=event.body,
+                metadata={"room": room.display_name},
+            )
+        except Exception:
+            await self._set_typing(room.room_id, False)
+            raise
