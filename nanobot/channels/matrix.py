@@ -3,6 +3,7 @@ import logging
 from typing import Any
 
 from loguru import logger
+from mistune import create_markdown
 from nio import (
     AsyncClient,
     AsyncClientConfig,
@@ -21,6 +22,47 @@ from nanobot.config.loader import get_data_dir
 
 LOGGING_STACK_BASE_DEPTH = 2
 TYPING_NOTICE_TIMEOUT_MS = 30_000
+MATRIX_HTML_FORMAT = "org.matrix.custom.html"
+
+MATRIX_MARKDOWN = create_markdown(
+    escape=True,
+    plugins=["table", "strikethrough", "task_lists"],
+)
+
+
+def _render_markdown_html(text: str) -> str | None:
+    """Render markdown to HTML for Matrix formatted messages."""
+    try:
+        formatted = MATRIX_MARKDOWN(text).strip()
+    except Exception as e:
+        logger.debug(
+            "Matrix markdown rendering failed ({}): {}",
+            type(e).__name__,
+            str(e),
+        )
+        return None
+
+    if not formatted:
+        return None
+
+    # Skip formatted_body for plain output (<p>...</p>) to keep payload minimal.
+    stripped = formatted.strip()
+    if stripped.startswith("<p>") and stripped.endswith("</p>") and "<p>" not in stripped[3:-4]:
+        return None
+
+    return formatted
+
+
+def _build_matrix_text_content(text: str) -> dict[str, str]:
+    """Build Matrix m.text payload with plaintext fallback and optional HTML."""
+    content: dict[str, str] = {"msgtype": "m.text", "body": text}
+    formatted_html = _render_markdown_html(text)
+    if not formatted_html:
+        return content
+
+    content["format"] = MATRIX_HTML_FORMAT
+    content["formatted_body"] = formatted_html
+    return content
 
 
 class _NioLoguruHandler(logging.Handler):
@@ -141,7 +183,7 @@ class MatrixChannel(BaseChannel):
             await self.client.room_send(
                 room_id=msg.chat_id,
                 message_type="m.room.message",
-                content={"msgtype": "m.text", "body": msg.content},
+                content=_build_matrix_text_content(msg.content),
                 ignore_unverified_devices=True,
             )
         finally:
