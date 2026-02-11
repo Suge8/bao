@@ -858,6 +858,29 @@ async def test_send_uses_server_upload_limit_when_smaller_than_local_limit(tmp_p
 
 
 @pytest.mark.asyncio
+async def test_send_blocks_all_outbound_media_when_limit_is_zero(tmp_path) -> None:
+    channel = MatrixChannel(_make_config(max_media_bytes=0), MessageBus())
+    client = _FakeAsyncClient("", "", "", None)
+    channel.client = client
+
+    file_path = tmp_path / "empty.txt"
+    file_path.write_bytes(b"")
+
+    await channel.send(
+        OutboundMessage(
+            channel="matrix",
+            chat_id="!room:matrix.org",
+            content="",
+            media=[str(file_path)],
+        )
+    )
+
+    assert client.upload_calls == []
+    assert len(client.room_send_calls) == 1
+    assert client.room_send_calls[0]["content"]["body"] == "[attachment: empty.txt - too large]"
+
+
+@pytest.mark.asyncio
 async def test_send_omits_ignore_unverified_devices_when_e2ee_disabled() -> None:
     channel = MatrixChannel(_make_config(e2ee_enabled=False), MessageBus())
     client = _FakeAsyncClient("", "", "", None)

@@ -496,7 +496,15 @@ class MatrixChannel(BaseChannel):
             )
             return MATRIX_ATTACHMENT_UPLOAD_FAILED_TEMPLATE.format(filename)
 
-        if limit_bytes and size_bytes > limit_bytes:
+        if limit_bytes <= 0:
+            logger.warning(
+                "Matrix outbound attachment skipped: media limit {} blocks all uploads for {}",
+                limit_bytes,
+                resolved,
+            )
+            return MATRIX_ATTACHMENT_TOO_LARGE_TEMPLATE.format(filename)
+
+        if size_bytes > limit_bytes:
             logger.warning(
                 "Matrix outbound attachment skipped: {} bytes exceeds limit {} for {}",
                 size_bytes,
