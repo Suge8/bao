@@ -133,7 +133,7 @@ class _FakeAsyncClient:
         )
         if self.upload_response is not None:
             return self.upload_response
-        return SimpleNamespace(content_uri="mxc://example.org/uploaded")
+        return SimpleNamespace(content_uri="mxc://example.org/uploaded"), None
 
     async def content_repository_config(self):
         return self.content_repository_config_response

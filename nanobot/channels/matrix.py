@@ -517,12 +517,13 @@ class MatrixChannel(BaseChannel):
             return MATRIX_ATTACHMENT_UPLOAD_FAILED_TEMPLATE.format(filename)
 
         mime = mimetypes.guess_type(filename, strict=False)[0] or "application/octet-stream"
-        upload_response = await self.client.upload(
+        upload_result = await self.client.upload(
             data,
             content_type=mime,
             filename=filename,
             filesize=len(data),
         )
+        upload_response = upload_result[0] if isinstance(upload_result, tuple) else upload_result
         if isinstance(upload_response, UploadError):
             logger.warning(
                 "Matrix outbound attachment upload failed for {}: {}",
