@@ -45,6 +45,7 @@ class _FakeAsyncClient:
         self.join_calls: list[str] = []
         self.callbacks: list[tuple[object, object]] = []
         self.response_callbacks: list[tuple[object, object]] = []
+        self.rooms: dict[str, object] = {}
         self.room_send_calls: list[dict[str, object]] = []
         self.typing_calls: list[tuple[str, bool, int]] = []
         self.download_calls: list[dict[str, object]] = []
@@ -122,6 +123,11 @@ class _FakeAsyncClient:
     ):
         if self.raise_on_upload:
             raise RuntimeError("upload failed")
+        if isinstance(data_provider, (bytes, bytearray)):
+            raise TypeError(
+                f"data_provider type {type(data_provider)!r} is not of a usable type "
+                "(Callable, IOBase)"
+            )
         self.upload_calls.append(
             {
                 "data_provider": data_provider,
@@ -133,6 +139,16 @@ class _FakeAsyncClient:
         )
         if self.upload_response is not None:
             return self.upload_response
+        if encrypt:
+            return (
+                SimpleNamespace(content_uri="mxc://example.org/uploaded"),
+                {
+                    "v": "v2",
+                    "iv": "iv",
+                    "hashes": {"sha256": "hash"},
+                    "key": {"alg": "A256CTR", "k": "key"},
+                },
+            )
         return SimpleNamespace(content_uri="mxc://example.org/uploaded"), None
 
     async def content_repository_config(self):
@@ -775,12 +791,44 @@ async def test_send_uploads_media_and_sends_file_event(tmp_path) -> None:
     )
 
     assert len(client.upload_calls) == 1
+    assert not isinstance(client.upload_calls[0]["data_provider"], (bytes, bytearray))
+    assert hasattr(client.upload_calls[0]["data_provider"], "read")
     assert client.upload_calls[0]["filename"] == "test.txt"
     assert client.upload_calls[0]["filesize"] == 5
     assert len(client.room_send_calls) == 2
     assert client.room_send_calls[0]["content"]["msgtype"] == "m.file"
     assert client.room_send_calls[0]["content"]["url"] == "mxc://example.org/uploaded"
     assert client.room_send_calls[1]["content"]["body"] == "Please review."
+
+
+@pytest.mark.asyncio
+async def test_send_uses_encrypted_media_payload_in_encrypted_room(tmp_path) -> None:
+    channel = MatrixChannel(_make_config(e2ee_enabled=True), MessageBus())
+    client = _FakeAsyncClient("", "", "", None)
+    client.rooms["!encrypted:matrix.org"] = SimpleNamespace(encrypted=True)
+    channel.client = client
+
+    file_path = tmp_path / "secret.txt"
+    file_path.write_text("topsecret", encoding="utf-8")
+
+    await channel.send(
+        OutboundMessage(
+            channel="matrix",
+            chat_id="!encrypted:matrix.org",
+            content="",
+            media=[str(file_path)],
+        )
+    )
+
+    assert len(client.upload_calls) == 1
+    assert client.upload_calls[0]["encrypt"] is True
+    assert len(client.room_send_calls) == 1
+    content = client.room_send_calls[0]["content"]
+    assert content["msgtype"] == "m.file"
+    assert "file" in content
+    assert "url" not in content
+    assert content["file"]["url"] == "mxc://example.org/uploaded"
+    assert content["file"]["hashes"]["sha256"] == "hash"
 
 
 @pytest.mark.asyncio
@@ -831,6 +879,33 @@ async def test_send_workspace_restriction_blocks_external_attachment(tmp_path) -
     assert client.upload_calls == []
     assert len(client.room_send_calls) == 1
     assert client.room_send_calls[0]["content"]["body"] == "[attachment: external.txt - upload failed]"
+
+
+@pytest.mark.asyncio
+async def test_send_handles_upload_exception_and_reports_failure(tmp_path) -> None:
+    channel = MatrixChannel(_make_config(), MessageBus())
+    client = _FakeAsyncClient("", "", "", None)
+    client.raise_on_upload = True
+    channel.client = client
+
+    file_path = tmp_path / "broken.txt"
+    file_path.write_text("hello", encoding="utf-8")
+
+    await channel.send(
+        OutboundMessage(
+            channel="matrix",
+            chat_id="!room:matrix.org",
+            content="Please review.",
+            media=[str(file_path)],
+        )
+    )
+
+    assert len(client.upload_calls) == 0
+    assert len(client.room_send_calls) == 1
+    assert (
+        client.room_send_calls[0]["content"]["body"]
+        == "Please review.\n[attachment: broken.txt - upload failed]"
+    )
 
 
 @pytest.mark.asyncio

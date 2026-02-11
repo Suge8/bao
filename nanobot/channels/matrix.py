@@ -374,6 +374,7 @@ class MatrixChannel(BaseChannel):
         mime: str,
         size_bytes: int,
         mxc_url: str,
+        encryption_info: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Build Matrix content payload for an uploaded file/image/audio/video."""
         msgtype = "m.file"
@@ -384,17 +385,34 @@ class MatrixChannel(BaseChannel):
         elif mime.startswith("video/"):
             msgtype = "m.video"
 
-        return {
+        content: dict[str, Any] = {
             "msgtype": msgtype,
             "body": filename,
             "filename": filename,
-            "url": mxc_url,
             "info": {
                 "mimetype": mime,
                 "size": size_bytes,
             },
             "m.mentions": {},
         }
+
+        if encryption_info:
+            # Encrypted media events use `file` metadata (with url/hash/key/iv),
+            # while unencrypted media events use top-level `url`.
+            file_info = dict(encryption_info)
+            file_info["url"] = mxc_url
+            content["file"] = file_info
+        else:
+            content["url"] = mxc_url
+
+        return content
+
+    def _is_encrypted_room(self, room_id: str) -> bool:
+        """Return True if the Matrix room is known as encrypted."""
+        if not self.client:
+            return False
+        room = getattr(self.client, "rooms", {}).get(room_id)
+        return bool(getattr(room, "encrypted", False))
 
     async def _send_room_content(self, room_id: str, content: dict[str, Any]) -> None:
         """Send Matrix m.room.message content with configured E2EE send options."""
@@ -513,25 +531,29 @@ class MatrixChannel(BaseChannel):
             )
             return MATRIX_ATTACHMENT_TOO_LARGE_TEMPLATE.format(filename)
 
+        mime = mimetypes.guess_type(filename, strict=False)[0] or "application/octet-stream"
+        encrypt_upload = self.config.e2ee_enabled and self._is_encrypted_room(room_id)
         try:
-            data = resolved.read_bytes()
-        except OSError as e:
+            with resolved.open("rb") as data_provider:
+                upload_result = await self.client.upload(
+                    data_provider,
+                    content_type=mime,
+                    filename=filename,
+                    encrypt=encrypt_upload,
+                    filesize=size_bytes,
+                )
+        except Exception as e:
             logger.warning(
-                "Matrix outbound attachment read failed for {} ({}): {}",
+                "Matrix outbound attachment upload failed for {} ({}): {}",
                 resolved,
                 type(e).__name__,
                 str(e),
             )
             return MATRIX_ATTACHMENT_UPLOAD_FAILED_TEMPLATE.format(filename)
-
-        mime = mimetypes.guess_type(filename, strict=False)[0] or "application/octet-stream"
-        upload_result = await self.client.upload(
-            data,
-            content_type=mime,
-            filename=filename,
-            filesize=len(data),
-        )
         upload_response = upload_result[0] if isinstance(upload_result, tuple) else upload_result
+        encryption_info: dict[str, Any] | None = None
+        if isinstance(upload_result, tuple) and isinstance(upload_result[1], dict):
+            encryption_info = upload_result[1]
         if isinstance(upload_response, UploadError):
             logger.warning(
                 "Matrix outbound attachment upload failed for {}: {}",
@@ -552,8 +574,9 @@ class MatrixChannel(BaseChannel):
         content = self._build_outbound_attachment_content(
             filename=filename,
             mime=mime,
-            size_bytes=len(data),
+            size_bytes=size_bytes,
             mxc_url=mxc_url,
+            encryption_info=encryption_info,
         )
         try:
             await self._send_room_content(room_id, content)
