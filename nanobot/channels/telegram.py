@@ -198,17 +198,17 @@ class TelegramChannel(BaseChannel):
             await self._app.shutdown()
             self._app = None
     
-    def _get_media_type(self, path: str) -> str:
+    @staticmethod
+    def _get_media_type(path: str) -> str:
         """Guess media type from file extension."""
-        path = path.lower()
-        if path.endswith(('.jpg', '.jpeg', '.png', '.gif', '.webp')):
+        ext = path.rsplit(".", 1)[-1].lower() if "." in path else ""
+        if ext in ("jpg", "jpeg", "png", "gif", "webp"):
             return "photo"
-        elif path.endswith('.ogg'):
+        if ext == "ogg":
             return "voice"
-        elif path.endswith(('.mp3', '.m4a', '.wav', '.aac')):
+        if ext in ("mp3", "m4a", "wav", "aac"):
             return "audio"
-        else:
-            return "document"
+        return "document"
 
     async def send(self, msg: OutboundMessage) -> None:
         """Send a message through Telegram."""
@@ -224,39 +224,24 @@ class TelegramChannel(BaseChannel):
             logger.error(f"Invalid chat_id: {msg.chat_id}")
             return
 
-        # Handle media files
-        if msg.media:
-            for media_path in msg.media:
-                try:
-                    media_type = self._get_media_type(media_path)
-                    
-                    # Determine caption (only for first media or if explicitly set, 
-                    # but here we keep it simple: content is sent separately if media is present
-                    # to avoid length issues, unless we want to attach it to the first media)
-                    # For simplicity: send media first, then text if present.
-                    # Or: if single media, attach text as caption.
-                    
-                    # Let's attach content as caption to the last media if single, 
-                    # otherwise send text separately.
-                    
-                    with open(media_path, 'rb') as f:
-                        if media_type == "photo":
-                            await self._app.bot.send_photo(chat_id=chat_id, photo=f)
-                        elif media_type == "voice":
-                            await self._app.bot.send_voice(chat_id=chat_id, voice=f)
-                        elif media_type == "audio":
-                            await self._app.bot.send_audio(chat_id=chat_id, audio=f)
-                        else:
-                            await self._app.bot.send_document(chat_id=chat_id, document=f)
-                            
-                except Exception as e:
-                    logger.error(f"Failed to send media {media_path}: {e}")
-                    await self._app.bot.send_message(
-                        chat_id=chat_id, 
-                        text=f"[Failed to send file: {media_path}]"
-                    )
+        # Send media files
+        for media_path in (msg.media or []):
+            try:
+                media_type = self._get_media_type(media_path)
+                sender = {
+                    "photo": self._app.bot.send_photo,
+                    "voice": self._app.bot.send_voice,
+                    "audio": self._app.bot.send_audio,
+                }.get(media_type, self._app.bot.send_document)
+                param = "photo" if media_type == "photo" else media_type if media_type in ("voice", "audio") else "document"
+                with open(media_path, 'rb') as f:
+                    await sender(chat_id=chat_id, **{param: f})
+            except Exception as e:
+                filename = media_path.rsplit("/", 1)[-1]
+                logger.error(f"Failed to send media {media_path}: {e}")
+                await self._app.bot.send_message(chat_id=chat_id, text=f"[Failed to send: {filename}]")
 
-        # Send text content if present
+        # Send text content
         if msg.content and msg.content != "[empty message]":
             for chunk in _split_message(msg.content):
                 try:
