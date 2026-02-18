@@ -42,30 +42,15 @@ class Session:
         self.updated_at = datetime.now()
     
     def get_history(self, max_messages: int = 500) -> list[dict[str, Any]]:
-        """
-        Get recent messages in LLM format.
-
-        Preserves tool metadata for replay/debugging fidelity.
-        """
-        history: list[dict[str, Any]] = []
-        for msg in self.messages[-max_messages:]:
-            llm_msg: dict[str, Any] = {
-                "role": msg["role"],
-                "content": msg.get("content", ""),
-            }
-
-            if msg["role"] == "assistant" and "tool_calls" in msg:
-                llm_msg["tool_calls"] = msg["tool_calls"]
-
-            if msg["role"] == "tool":
-                if "tool_call_id" in msg:
-                    llm_msg["tool_call_id"] = msg["tool_call_id"]
-                if "name" in msg:
-                    llm_msg["name"] = msg["name"]
-
-            history.append(llm_msg)
-
-        return history
+        """Get recent messages in LLM format, preserving tool metadata."""
+        out: list[dict[str, Any]] = []
+        for m in self.messages[-max_messages:]:
+            entry: dict[str, Any] = {"role": m["role"], "content": m.get("content", "")}
+            for k in ("tool_calls", "tool_call_id", "name"):
+                if k in m:
+                    entry[k] = m[k]
+            out.append(entry)
+        return out
     
     def clear(self) -> None:
         """Clear all messages and reset session to initial state."""
@@ -93,7 +78,7 @@ class SessionManager:
         return self.sessions_dir / f"{safe_key}.jsonl"
 
     def _get_legacy_session_path(self, key: str) -> Path:
-        """Get the legacy global session path for backward compatibility."""
+        """Legacy global session path (~/.nanobot/sessions/)."""
         safe_key = safe_filename(key.replace(":", "_"))
         return self.legacy_sessions_dir / f"{safe_key}.jsonl"
     
@@ -123,7 +108,9 @@ class SessionManager:
         if not path.exists():
             legacy_path = self._get_legacy_session_path(key)
             if legacy_path.exists():
-                path = legacy_path
+                import shutil
+                shutil.move(str(legacy_path), str(path))
+                logger.info(f"Migrated session {key} from legacy path")
 
         if not path.exists():
             return None
