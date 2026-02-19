@@ -1,0 +1,82 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 180" width="700" height="180">
+  <defs>
+    <linearGradient id="f-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#6366f1" stop-opacity="0.12"/>
+      <stop offset="100%" stop-color="#8b5cf6" stop-opacity="0.06"/>
+    </linearGradient>
+  </defs>
+  <style>
+    @keyframes card-float {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(-5px); }
+    }
+    .card-1 { animation: card-float 5s ease-in-out infinite; }
+    .card-2 { animation: card-float 5s ease-in-out infinite 0.8s; }
+    .card-3 { animation: card-float 5s ease-in-out infinite 1.6s; }
+    .card-4 { animation: card-float 5s ease-in-out infinite 2.4s; }
+    @keyframes icon-pulse {
+      0%, 100% { opacity: 0.7; }
+      50% { opacity: 1; }
+    }
+    .icon-glow { animation: icon-pulse 3s ease-in-out infinite; }
+    .icon-glow2 { animation: icon-pulse 3s ease-in-out infinite 0.8s; }
+    .icon-glow3 { animation: icon-pulse 3s ease-in-out infinite 1.6s; }
+    .icon-glow4 { animation: icon-pulse 3s ease-in-out infinite 2.4s; }
+  </style>
+
+  <rect width="700" height="180" fill="#0d1117" rx="12"/>
+
+  <!-- Card 1: Messages -->
+  <g class="card-1">
+    <rect x="30" y="30" width="145" height="120" rx="10" fill="url(#f-grad)" stroke="#6366f1" stroke-width="1" stroke-opacity="0.3"/>
+    <!-- Chat bubble icon -->
+    <g class="icon-glow" transform="translate(102, 65)">
+      <path d="M-14-10 h28 a4 4 0 0 1 4 4 v14 a4 4 0 0 1-4 4 h-16 l-8 6 v-6 h-4 a4 4 0 0 1-4-4 v-14 a4 4 0 0 1 4-4z" fill="none" stroke="#a78bfa" stroke-width="1.5"/>
+      <line x1="-8" y1="-2" x2="8" y2="-2" stroke="#a78bfa" stroke-width="1" opacity="0.6"/>
+      <line x1="-8" y1="4" x2="4" y2="4" stroke="#a78bfa" stroke-width="1" opacity="0.4"/>
+    </g>
+    <text x="102" y="105" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" fill="#c4b5fd" font-weight="600">手机遥控</text>
+    <text x="102" y="122" text-anchor="middle" font-family="system-ui, sans-serif" font-size="9" fill="#6b7280">WhatsApp / iMessage</text>
+  </g>
+
+  <!-- Card 2: Security -->
+  <g class="card-2">
+    <rect x="195" y="30" width="145" height="120" rx="10" fill="url(#f-grad)" stroke="#6366f1" stroke-width="1" stroke-opacity="0.3"/>
+    <!-- Shield icon -->
+    <g class="icon-glow2" transform="translate(267, 65)">
+      <path d="M0-14 l14 6 v8 c0 8-6 14-14 18 c-8-4-14-10-14-18 v-8z" fill="none" stroke="#a78bfa" stroke-width="1.5"/>
+      <polyline points="-5,2 -1,7 7,-3" fill="none" stroke="#a78bfa" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    </g>
+    <text x="267" y="105" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" fill="#c4b5fd" font-weight="600">容器隔离</text>
+    <text x="267" y="122" text-anchor="middle" font-family="system-ui, sans-serif" font-size="9" fill="#6b7280">OS 级沙箱，Bash 也安全</text>
+  </g>
+
+  <!-- Card 3: Scheduler -->
+  <g class="card-3">
+    <rect x="360" y="30" width="145" height="120" rx="10" fill="url(#f-grad)" stroke="#6366f1" stroke-width="1" stroke-opacity="0.3"/>
+    <!-- Clock icon -->
+    <g class="icon-glow3" transform="translate(432, 65)">
+      <circle cx="0" cy="0" r="13" fill="none" stroke="#a78bfa" stroke-width="1.5"/>
+      <line x1="0" y1="-1" x2="0" y2="-8" stroke="#a78bfa" stroke-width="1.5" stroke-linecap="round"/>
+      <line x1="0" y1="-1" x2="6" y2="3" stroke="#a78bfa" stroke-width="1.5" stroke-linecap="round"/>
+      <circle cx="0" cy="-1" r="1.5" fill="#a78bfa"/>
+    </g>
+    <text x="432" y="105" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" fill="#c4b5fd" font-weight="600">全自动任务</text>
+    <text x="432" y="122" text-anchor="middle" font-family="system-ui, sans-serif" font-size="9" fill="#6b7280">定时跑，不用你盯着</text>
+  </g>
+
+  <!-- Card 4: Web -->
+  <g class="card-4">
+    <rect x="525" y="30" width="145" height="120" rx="10" fill="url(#f-grad)" stroke="#6366f1" stroke-width="1" stroke-opacity="0.3"/>
+    <!-- Globe icon -->
+    <g class="icon-glow4" transform="translate(597, 65)">
+      <circle cx="0" cy="0" r="13" fill="none" stroke="#a78bfa" stroke-width="1.5"/>
+      <ellipse cx="0" cy="0" rx="6" ry="13" fill="none" stroke="#a78bfa" stroke-width="1" opacity="0.6"/>
+      <line x1="-13" y1="0" x2="13" y2="0" stroke="#a78bfa" stroke-width="1" opacity="0.5"/>
+      <line x1="-11" y1="-6" x2="11" y2="-6" stroke="#a78bfa" stroke-width="0.8" opacity="0.4"/>
+      <line x1="-11" y1="6" x2="11" y2="6" stroke="#a78bfa" stroke-width="0.8" opacity="0.4"/>
+    </g>
+    <text x="597" y="105" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" fill="#c4b5fd" font-weight="600">网络 + 浏览器</text>
+    <text x="597" y="122" text-anchor="middle" font-family="system-ui, sans-serif" font-size="9" fill="#6b7280">搜索、抓取、截图</text>
+  </g>
+</svg>

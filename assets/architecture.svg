@@ -1,0 +1,92 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 280" width="700" height="280">
+  <defs>
+    <linearGradient id="a-glow" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#6366f1"/>
+      <stop offset="100%" stop-color="#a78bfa"/>
+    </linearGradient>
+    <linearGradient id="a-arrow" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#6366f1" stop-opacity="0.2"/>
+      <stop offset="50%" stop-color="#8b5cf6" stop-opacity="0.6"/>
+      <stop offset="100%" stop-color="#a78bfa" stop-opacity="0.2"/>
+    </linearGradient>
+    <filter id="a-blur">
+      <feGaussianBlur stdDeviation="6" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <style>
+    @keyframes pulse { 0%,100%{opacity:0.6;transform:scale(1)} 50%{opacity:1;transform:scale(1.08)} }
+    @keyframes spin { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }
+    @keyframes flow { from{stroke-dashoffset:40} to{stroke-dashoffset:0} }
+    @keyframes blink { 0%,100%{opacity:0.4} 50%{opacity:1} }
+    @keyframes float-up { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-4px)} }
+    .node-phone { animation: pulse 3s ease-in-out infinite; transform-origin: 110px 140px; }
+    .node-bao { animation: float-up 4s ease-in-out infinite; }
+    .node-container { animation: pulse 3s ease-in-out infinite 1.5s; transform-origin: 590px 140px; }
+    .gear { animation: spin 8s linear infinite; transform-origin: 350px 120px; }
+    .flow-line { animation: flow 2s linear infinite; }
+    .blink-dot { animation: blink 2s ease-in-out infinite; }
+    .blink-dot2 { animation: blink 2s ease-in-out infinite 0.7s; }
+    .blink-dot3 { animation: blink 2s ease-in-out infinite 1.4s; }
+  </style>
+
+  <rect width="700" height="280" fill="#0d1117" rx="12"/>
+
+  <!-- Flow arrows -->
+  <path class="flow-line" d="M175 140 L270 140" fill="none" stroke="url(#a-arrow)" stroke-width="2" stroke-dasharray="6 4"/>
+  <path class="flow-line" d="M430 140 L520 140" fill="none" stroke="url(#a-arrow)" stroke-width="2" stroke-dasharray="6 4" style="animation-delay:0.5s"/>
+
+  <!-- Arrow heads -->
+  <polygon points="268,135 278,140 268,145" fill="#8b5cf6" opacity="0.6"/>
+  <polygon points="518,135 528,140 518,145" fill="#8b5cf6" opacity="0.6"/>
+
+  <!-- Flow dots on arrows -->
+  <circle class="blink-dot" cx="220" cy="140" r="2.5" fill="#a78bfa"/>
+  <circle class="blink-dot2" cx="475" cy="140" r="2.5" fill="#a78bfa"/>
+
+  <!-- Node 1: Phone -->
+  <g class="node-phone">
+    <rect x="70" y="85" width="80" height="110" rx="12" fill="none" stroke="#6366f1" stroke-width="1.5" opacity="0.7"/>
+    <rect x="78" y="100" width="64" height="75" rx="4" fill="#6366f1" opacity="0.1"/>
+    <circle cx="110" cy="185" r="4" fill="none" stroke="#6366f1" stroke-width="1" opacity="0.5"/>
+    <!-- Message bubbles -->
+    <rect x="84" y="108" width="36" height="10" rx="5" fill="#6366f1" opacity="0.4"/>
+    <rect x="96" y="124" width="40" height="10" rx="5" fill="#8b5cf6" opacity="0.3"/>
+    <rect x="84" y="140" width="30" height="10" rx="5" fill="#6366f1" opacity="0.35"/>
+  </g>
+  <text x="110" y="70" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" fill="#9ca3af" font-weight="500">WhatsApp</text>
+  <text x="110" y="84" text-anchor="middle" font-family="system-ui, sans-serif" font-size="10" fill="#6b7280">iMessage</text>
+
+  <!-- Node 2: bao process -->
+  <g class="node-bao">
+    <rect x="280" y="90" width="140" height="100" rx="10" fill="#8b5cf6" fill-opacity="0.08" stroke="#8b5cf6" stroke-width="1.5" opacity="0.7"/>
+    <!-- Gear icon -->
+    <g class="gear" opacity="0.5">
+      <circle cx="350" cy="120" r="12" fill="none" stroke="#a78bfa" stroke-width="1.5"/>
+      <circle cx="350" cy="120" r="5" fill="none" stroke="#a78bfa" stroke-width="1"/>
+      <line x1="350" y1="105" x2="350" y2="110" stroke="#a78bfa" stroke-width="1.5"/>
+      <line x1="350" y1="130" x2="350" y2="135" stroke="#a78bfa" stroke-width="1.5"/>
+      <line x1="335" y1="120" x2="340" y2="120" stroke="#a78bfa" stroke-width="1.5"/>
+      <line x1="360" y1="120" x2="365" y2="120" stroke="#a78bfa" stroke-width="1.5"/>
+    </g>
+    <text x="350" y="155" text-anchor="middle" font-family="system-ui, sans-serif" font-size="13" fill="#a78bfa" font-weight="600">bao</text>
+    <text x="350" y="172" text-anchor="middle" font-family="system-ui, sans-serif" font-size="9" fill="#6b7280">SQLite + Router</text>
+  </g>
+
+  <!-- Node 3: Container -->
+  <g class="node-container">
+    <rect x="535" y="85" width="120" height="110" rx="10" fill="#6366f1" fill-opacity="0.06" stroke="#6366f1" stroke-width="1.5" opacity="0.7"/>
+    <!-- Container box icon -->
+    <rect x="572" y="105" width="26" height="20" rx="3" fill="none" stroke="#a78bfa" stroke-width="1.2" opacity="0.6"/>
+    <rect x="569" y="102" width="32" height="5" rx="2" fill="none" stroke="#a78bfa" stroke-width="1.2" opacity="0.6"/>
+    <!-- Tool dots -->
+    <circle class="blink-dot" cx="570" cy="145" r="2" fill="#6366f1"/>
+    <circle class="blink-dot2" cx="585" cy="145" r="2" fill="#8b5cf6"/>
+    <circle class="blink-dot3" cx="600" cy="145" r="2" fill="#a78bfa"/>
+    <text x="595" y="170" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" fill="#a78bfa" font-weight="500">Container</text>
+    <text x="595" y="183" text-anchor="middle" font-family="system-ui, sans-serif" font-size="9" fill="#6b7280">Claude Agent</text>
+  </g>
+
+  <!-- Labels -->
+  <text x="350" y="250" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" fill="#4b5563" letter-spacing="2">消息进 → 轮询检测 → 容器执行 → 结果回手机</text>
+</svg>
