@@ -62,7 +62,7 @@ class MessageBus:
                     try:
                         await callback(msg)
                     except Exception as e:
-                        logger.error(f"Error dispatching to {msg.channel}: {e}")
+                        logger.error("Error dispatching to {}: {}", msg.channel, e)
             except asyncio.TimeoutError:
                 continue
     

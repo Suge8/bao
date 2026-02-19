@@ -219,7 +219,7 @@ class AgentLoop:
                 for tool_call in response.tool_calls:
                     tools_used.append(tool_call.name)
                     args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
-                    logger.info(f"Tool call: {tool_call.name}({args_str[:200]})")
+                    logger.info("Tool call: {}({})", tool_call.name, args_str[:200])
                     result = await self.tools.execute(tool_call.name, tool_call.arguments)
                     messages = self.context.add_tool_result(
                         messages, tool_call.id, tool_call.name, result
@@ -247,7 +247,7 @@ class AgentLoop:
                     if response:
                         await self.bus.publish_outbound(response)
                 except Exception as e:
-                    logger.error(f"Error processing message: {e}")
+                    logger.error("Error processing message: {}", e)
                     await self.bus.publish_outbound(OutboundMessage(
                         channel=msg.channel,
                         chat_id=msg.chat_id,
@@ -292,7 +292,7 @@ class AgentLoop:
             return await self._process_system_message(msg)
         
         preview = msg.content[:80] + "..." if len(msg.content) > 80 else msg.content
-        logger.info(f"Processing message from {msg.channel}:{msg.sender_id}: {preview}")
+        logger.info("Processing message from {}:{}: {}", msg.channel, msg.sender_id, preview)
         
         key = session_key or msg.session_key
         session = self.sessions.get_or_create(key)
@@ -344,7 +344,7 @@ class AgentLoop:
             final_content = "I've completed processing but have no response to give."
         
         preview = final_content[:120] + "..." if len(final_content) > 120 else final_content
-        logger.info(f"Response to {msg.channel}:{msg.sender_id}: {preview}")
+        logger.info("Response to {}:{}: {}", msg.channel, msg.sender_id, preview)
         
         session.add_message("user", msg.content)
         session.add_message("assistant", final_content,
@@ -469,7 +469,7 @@ Respond with ONLY valid JSON, no markdown fences."""
                 text = text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
             result = json_repair.loads(text)
             if not isinstance(result, dict):
-                logger.warning(f"Memory consolidation: unexpected response type, skipping. Response: {text[:200]}")
+                logger.warning("Memory consolidation: unexpected response type, skipping. Response: {}", text[:200])
                 return
 
             if entry := result.get("history_entry"):
@@ -484,7 +484,7 @@ Respond with ONLY valid JSON, no markdown fences."""
                 session.last_consolidated = len(session.messages) - keep_count
             logger.info(f"Memory consolidation done: {len(session.messages)} messages, last_consolidated={session.last_consolidated}")
         except Exception as e:
-            logger.error(f"Memory consolidation failed: {e}")
+            logger.error("Memory consolidation failed: {}", e)
 
     async def process_direct(
         self,

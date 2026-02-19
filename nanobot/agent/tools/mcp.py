@@ -77,4 +77,4 @@ async def connect_mcp_servers(
 
             logger.info(f"MCP server '{name}': connected, {len(tools.tools)} tools registered")
         except Exception as e:
-            logger.error(f"MCP server '{name}': failed to connect: {e}")
+            logger.error("MCP server '{}': failed to connect: {}", name, e)

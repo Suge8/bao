@@ -53,14 +53,14 @@ class WhatsAppChannel(BaseChannel):
                         try:
                             await self._handle_bridge_message(message)
                         except Exception as e:
-                            logger.error(f"Error handling bridge message: {e}")
+                            logger.error("Error handling bridge message: {}", e)
                     
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 self._connected = False
                 self._ws = None
-                logger.warning(f"WhatsApp bridge connection error: {e}")
+                logger.warning("WhatsApp bridge connection error: {}", e)
                 
                 if self._running:
                     logger.info("Reconnecting in 5 seconds...")
@@ -89,14 +89,14 @@ class WhatsAppChannel(BaseChannel):
             }
             await self._ws.send(json.dumps(payload))
         except Exception as e:
-            logger.error(f"Error sending WhatsApp message: {e}")
+            logger.error("Error sending WhatsApp message: {}", e)
     
     async def _handle_bridge_message(self, raw: str) -> None:
         """Handle a message from the bridge."""
         try:
             data = json.loads(raw)
         except json.JSONDecodeError:
-            logger.warning(f"Invalid JSON from bridge: {raw[:100]}")
+            logger.warning("Invalid JSON from bridge: {}", raw[:100])
             return
         
         msg_type = data.get("type")
@@ -145,4 +145,4 @@ class WhatsAppChannel(BaseChannel):
             logger.info("Scan QR code in the bridge terminal to connect WhatsApp")
         
         elif msg_type == "error":
-            logger.error(f"WhatsApp bridge error: {data.get('error')}")
+            logger.error("WhatsApp bridge error: {}", data.get('error'))

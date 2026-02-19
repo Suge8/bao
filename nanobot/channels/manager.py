@@ -142,7 +142,7 @@ class ChannelManager:
         try:
             await channel.start()
         except Exception as e:
-            logger.error(f"Failed to start channel {name}: {e}")
+            logger.error("Failed to start channel {}: {}", name, e)
 
     async def start_all(self) -> None:
         """Start all channels and the outbound dispatcher."""
@@ -180,7 +180,7 @@ class ChannelManager:
                 await channel.stop()
                 logger.info(f"Stopped {name} channel")
             except Exception as e:
-                logger.error(f"Error stopping {name}: {e}")
+                logger.error("Error stopping {}: {}", name, e)
     
     async def _dispatch_outbound(self) -> None:
         """Dispatch outbound messages to the appropriate channel."""
@@ -198,7 +198,7 @@ class ChannelManager:
                     try:
                         await channel.send(msg)
                     except Exception as e:
-                        logger.error(f"Error sending to {msg.channel}: {e}")
+                        logger.error("Error sending to {}: {}", msg.channel, e)
                 else:
                     logger.warning(f"Unknown channel: {msg.channel}")
                     

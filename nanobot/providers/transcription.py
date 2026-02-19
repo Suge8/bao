@@ -61,5 +61,5 @@ class GroqTranscriptionProvider:
                     return data.get("text", "")
                     
         except Exception as e:
-            logger.error(f"Groq transcription error: {e}")
+            logger.error("Groq transcription error: {}", e)
             return ""

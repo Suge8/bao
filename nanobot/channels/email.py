@@ -94,7 +94,7 @@ class EmailChannel(BaseChannel):
                         metadata=item.get("metadata", {}),
                     )
             except Exception as e:
-                logger.error(f"Email polling error: {e}")
+                logger.error("Email polling error: {}", e)
 
             await asyncio.sleep(poll_seconds)
 
@@ -143,7 +143,7 @@ class EmailChannel(BaseChannel):
         try:
             await asyncio.to_thread(self._smtp_send, email_msg)
         except Exception as e:
-            logger.error(f"Error sending email to {to_addr}: {e}")
+            logger.error("Error sending email to {}: {}", to_addr, e)
             raise
 
     def _validate_config(self) -> bool:
