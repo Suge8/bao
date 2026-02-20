@@ -3,6 +3,7 @@
 from contextlib import AsyncExitStack
 from typing import Any
 
+import httpx
 from loguru import logger
 
 from nanobot.agent.tools.base import Tool
@@ -59,7 +60,6 @@ async def connect_mcp_servers(
                 read, write = await stack.enter_async_context(stdio_client(params))
             elif cfg.url:
                 from mcp.client.streamable_http import streamable_http_client
-                import httpx
                 if cfg.headers:
                     http_client = await stack.enter_async_context(
                         httpx.AsyncClient(
