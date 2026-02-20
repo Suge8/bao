@@ -89,6 +89,7 @@ class AgentLoop:
         self._mcp_servers = mcp_servers or {}
         self._mcp_stack: AsyncExitStack | None = None
         self._mcp_connected = False
+        self._mcp_connecting = False
         self._consolidating: set[str] = set()  # Session keys with consolidation in progress
         self._register_default_tools()
     
@@ -126,8 +127,9 @@ class AgentLoop:
     
     async def _connect_mcp(self) -> None:
         """Connect to configured MCP servers (one-time, lazy)."""
-        if self._mcp_connected or not self._mcp_servers:
+        if self._mcp_connected or self._mcp_connecting or not self._mcp_servers:
             return
+        self._mcp_connecting = True
         from nanobot.agent.tools.mcp import connect_mcp_servers
         try:
             self._mcp_stack = AsyncExitStack()
@@ -142,6 +144,8 @@ class AgentLoop:
                 except Exception:
                     pass
                 self._mcp_stack = None
+        finally:
+            self._mcp_connecting = False
 
     def _set_tool_context(self, channel: str, chat_id: str, message_id: str | None = None) -> None:
         """Update context for all tools that need routing info."""
