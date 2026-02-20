@@ -253,10 +253,6 @@ class AgentLoop:
                 if not tools_used and not text_only_retried and final_content:
                     text_only_retried = True
                     logger.debug("Interim text response (no tools used yet), retrying: {}", final_content[:80])
-                    messages = self.context.add_assistant_message(
-                        messages, response.content,
-                        reasoning_content=response.reasoning_content,
-                    )
                     final_content = None
                     continue
                 break
