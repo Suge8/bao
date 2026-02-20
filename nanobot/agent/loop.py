@@ -245,7 +245,8 @@ class AgentLoop:
                     final_content = None
                     continue
                 # Fall back to interim content if retry produced nothing
-                if not final_content and interim_content:
+                # and no tools were used (if tools ran, interim was truly interim)
+                if not final_content and interim_content and not tools_used:
                     final_content = interim_content
                 break
 
