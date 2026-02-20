@@ -752,7 +752,14 @@ Add MCP servers to your `config.json`:
         "command": "npx",
         "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/dir"]
       }
-    }
+    },
+    "urlMcpServers": {
+        "url": "https://xx.xx.xx.xx:xxxx/mcp/",
+        "headers": {
+          "Authorization": "Bearer xxxxx",
+          "X-API-Key": "xxxxxxx"
+        }
+      },
   }
 }
 ```
@@ -762,7 +769,7 @@ Two transport modes are supported:
 | Mode | Config | Example |
 |------|--------|---------|
 | **Stdio** | `command` + `args` | Local process via `npx` / `uvx` |
-| **HTTP** | `url` | Remote endpoint (`https://mcp.example.com/sse`) |
+| **HTTP** | `url` + `option(headers)`| Remote endpoint (`https://mcp.example.com/sse`) |
 
 MCP tools are automatically discovered and registered on startup. The LLM can use them alongside built-in tools — no extra configuration needed.
 
