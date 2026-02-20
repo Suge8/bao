@@ -6,7 +6,7 @@ import json
 import json_repair
 from pathlib import Path
 import re
-from typing import Any, Awaitable, Callable
+from typing import Awaitable, Callable
 
 from loguru import logger
 
@@ -343,7 +343,7 @@ class AgentLoop:
         cmd = msg.content.strip().lower()
         if cmd == "/new":
             lock = self._get_consolidation_lock(session.key)
-            messages_to_archive: list[dict[str, Any]] = []
+            messages_to_archive = []
             try:
                 async with lock:
                     messages_to_archive = session.messages[session.last_consolidated :].copy()
