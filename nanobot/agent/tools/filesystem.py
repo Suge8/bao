@@ -1,5 +1,6 @@
 """File system tools: read, write, edit."""
 
+import difflib
 from pathlib import Path
 from typing import Any
 
@@ -169,8 +170,6 @@ class EditFileTool(Tool):
     @staticmethod
     def _not_found_message(old_text: str, content: str, path: str) -> str:
         """Build a helpful error when old_text is not found."""
-        import difflib
-
         lines = content.splitlines(keepends=True)
         old_lines = old_text.splitlines(keepends=True)
 
