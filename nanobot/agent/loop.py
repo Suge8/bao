@@ -244,10 +244,7 @@ class AgentLoop:
                         await self.bus.publish_outbound(response)
                     elif msg.channel == "cli":
                         await self.bus.publish_outbound(OutboundMessage(
-                            channel=msg.channel,
-                            chat_id=msg.chat_id,
-                            content="",
-                            metadata=msg.metadata or {},
+                            channel=msg.channel, chat_id=msg.chat_id, content="", metadata=msg.metadata or {},
                         ))
                 except Exception as e:
                     logger.error("Error processing message: {}", e)
