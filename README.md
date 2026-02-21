@@ -20,7 +20,7 @@
 
 ## 📢 News
 
-- **2026-02-20** 🐦 Feishu now receives images, audio, and files from users. More reliable memory under the hood.
+- **2026-02-20** 🐦 Feishu now receives multimodal files from users. More reliable memory under the hood.
 - **2026-02-19** ✨ Slack now sends files, Discord splits long messages, and subagents work in CLI mode.
 - **2026-02-18** ⚡️ nanobot now supports VolcEngine, MCP custom auth headers, and Anthropic prompt caching.
 - **2026-02-17** 🎉 Released **v0.1.4** — MCP support, progress streaming, new providers, and multiple channel improvements. Please see [release notes](https://github.com/HKUDS/nanobot/releases/tag/v0.1.4) for details.
