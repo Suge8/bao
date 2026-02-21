@@ -71,8 +71,8 @@ class QQChannel(BaseChannel):
         BotClass = _make_bot_class(self)
         self._client = BotClass()
 
-        self._bot_task = asyncio.create_task(self._run_bot())
         logger.info("QQ bot started (C2C private message)")
+        await self._run_bot()
 
     async def _run_bot(self) -> None:
         """Run the bot connection with auto-reconnect."""
