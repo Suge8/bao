@@ -19,8 +19,12 @@ class CustomProvider(LLMProvider):
 
     async def chat(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None = None,
                    model: str | None = None, max_tokens: int = 4096, temperature: float = 0.7) -> LLMResponse:
-        kwargs: dict[str, Any] = {"model": model or self.default_model, "messages": messages,
-                                  "max_tokens": max(1, max_tokens), "temperature": temperature}
+        kwargs: dict[str, Any] = {
+            "model": model or self.default_model,
+            "messages": self._sanitize_empty_content(messages),
+            "max_tokens": max(1, max_tokens),
+            "temperature": temperature,
+        }
         if tools:
             kwargs.update(tools=tools, tool_choice="auto")
         try:
@@ -45,3 +49,4 @@ class CustomProvider(LLMProvider):
 
     def get_default_model(self) -> str:
         return self.default_model
+
