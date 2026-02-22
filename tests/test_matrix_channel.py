@@ -332,7 +332,7 @@ async def test_typing_keepalive_refreshes_periodically(monkeypatch) -> None:
     channel.client = client
     channel._running = True
 
-    monkeypatch.setattr(matrix_module, "TYPING_KEEPALIVE_INTERVAL_SECONDS", 0.01)
+    monkeypatch.setattr(matrix_module, "TYPING_KEEPALIVE_INTERVAL_MS", 10)
 
     await channel._start_typing_keepalive("!room:matrix.org")
     await asyncio.sleep(0.03)
@@ -1139,6 +1139,29 @@ async def test_send_stops_typing_keepalive_task() -> None:
 
     assert "!room:matrix.org" not in channel._typing_tasks
     assert client.typing_calls[-1] == ("!room:matrix.org", False, TYPING_NOTICE_TIMEOUT_MS)
+
+
+@pytest.mark.asyncio
+async def test_send_progress_keeps_typing_keepalive_running() -> None:
+    channel = MatrixChannel(_make_config(), MessageBus())
+    client = _FakeAsyncClient("", "", "", None)
+    channel.client = client
+    channel._running = True
+
+    await channel._start_typing_keepalive("!room:matrix.org")
+    assert "!room:matrix.org" in channel._typing_tasks
+
+    await channel.send(
+        OutboundMessage(
+            channel="matrix",
+            chat_id="!room:matrix.org",
+            content="working...",
+            metadata={"_progress": True, "_progress_kind": "reasoning"},
+        )
+    )
+
+    assert "!room:matrix.org" in channel._typing_tasks
+    assert client.typing_calls[-1] == ("!room:matrix.org", True, TYPING_NOTICE_TIMEOUT_MS)
 
 
 @pytest.mark.asyncio

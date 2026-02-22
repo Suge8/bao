@@ -43,7 +43,7 @@ TYPING_NOTICE_TIMEOUT_MS = 30_000
 # https://spec.matrix.org/v1.17/client-server-api/#typing-notifications
 # Keepalive interval must stay below TYPING_NOTICE_TIMEOUT_MS so the typing
 # indicator does not expire while the agent is still processing.
-TYPING_KEEPALIVE_INTERVAL_SECONDS = 20.0
+TYPING_KEEPALIVE_INTERVAL_MS = 20_000
 MATRIX_HTML_FORMAT = "org.matrix.custom.html"
 MATRIX_ATTACHMENT_MARKER_TEMPLATE = "[attachment: {}]"
 MATRIX_ATTACHMENT_TOO_LARGE_TEMPLATE = "[attachment: {} - too large]"
@@ -606,13 +606,14 @@ class MatrixChannel(BaseChannel):
         return None
 
     async def send(self, msg: OutboundMessage) -> None:
-        """Send message text and optional attachments to a Matrix room, then clear typing state."""
+        """Send Matrix outbound content and clear typing only for non-progress messages."""
         if not self.client:
             return
 
         text = msg.content or ""
         candidates = self._collect_outbound_media_candidates(msg.media)
         relates_to = self._build_thread_relates_to(msg.metadata)
+        is_progress = bool((msg.metadata or {}).get("_progress"))
 
         try:
             failures: list[str] = []
@@ -641,7 +642,8 @@ class MatrixChannel(BaseChannel):
                     content["m.relates_to"] = relates_to
                 await self._send_room_content(msg.chat_id, content)
         finally:
-            await self._stop_typing_keepalive(msg.chat_id, clear_typing=True)
+            if not is_progress:
+                await self._stop_typing_keepalive(msg.chat_id, clear_typing=True)
 
     def _register_event_callbacks(self) -> None:
         """Register Matrix event callbacks used by this channel."""
@@ -713,7 +715,7 @@ class MatrixChannel(BaseChannel):
         async def _typing_loop() -> None:
             try:
                 while self._running:
-                    await asyncio.sleep(TYPING_KEEPALIVE_INTERVAL_SECONDS)
+                    await asyncio.sleep(TYPING_KEEPALIVE_INTERVAL_MS / 1000)
                     await self._set_typing(room_id, True)
             except asyncio.CancelledError:
                 pass
