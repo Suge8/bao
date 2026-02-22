@@ -193,6 +193,9 @@ class ChannelManager:
                     timeout=1.0
                 )
                 
+                if msg.metadata.get("_progress") and not self.config.channels.send_progress:
+                    continue
+                
                 channel = self.channels.get(msg.channel)
                 if channel:
                     try:
