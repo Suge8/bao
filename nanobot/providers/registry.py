@@ -100,6 +100,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         default_api_base="https://openrouter.ai/api/v1",
         strip_model_prefix=False,
         model_overrides=(),
+        supports_prompt_caching=True,
     ),
 
     # AiHubMix: global gateway, OpenAI-compatible interface.
@@ -146,7 +147,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         keywords=("volcengine", "volces", "ark"),
         env_key="OPENAI_API_KEY",
         display_name="VolcEngine",
-        litellm_prefix="openai",
+        litellm_prefix="volcengine",
         skip_prefixes=(),
         env_extras=(),
         is_gateway=True,
