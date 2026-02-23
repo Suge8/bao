@@ -2,15 +2,7 @@
   <defs>
     <style>
       .t{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans SC",Helvetica,Arial,sans-serif}
-      @keyframes fadeUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
       @keyframes shimmer{0%{opacity:.4}50%{opacity:.8}100%{opacity:.4}}
-      @keyframes gradShift{0%{stop-color:#22c55e}50%{stop-color:#00d4ff}100%{stop-color:#22c55e}}
-      .b1{animation:fadeUp .6s ease-out .1s forwards}
-      .b2{animation:fadeUp .6s ease-out .18s forwards}
-      .b3{animation:fadeUp .6s ease-out .26s forwards}
-      .b4{animation:fadeUp .6s ease-out .34s forwards}
-      .b5{animation:fadeUp .6s ease-out .42s forwards}
-      .b6{animation:fadeUp .6s ease-out .50s forwards}
       .acc{animation:shimmer 4s ease-in-out infinite}
     </style>
     <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
@@ -61,7 +53,7 @@
   <!-- Row 2: [Small left] [Small mid] [Tall right cont.] -->
 
   <!-- ████ CARD 1: 经验学习 — HERO (2-col span, row 1) ████ -->
-  <g transform="translate(16,16)" class="b1">
+  <g transform="translate(16,16)">
     <rect width="504" height="200" rx="14" fill="#111720" stroke="#1c2535" stroke-width="1"/>
     <rect width="504" height="200" rx="14" fill="url(#g1)"/>
     <!-- Accent bar -->
@@ -92,7 +84,7 @@
   </g>
 
   <!-- ████ CARD 2: 持久记忆 — Tall right (spans 2 rows) ████ -->
-  <g transform="translate(532,16)" class="b2">
+  <g transform="translate(532,16)">
     <rect width="252" height="308" rx="14" fill="#111720" stroke="#1c2535" stroke-width="1"/>
     <rect width="252" height="308" rx="14" fill="url(#g2)"/>
     <rect x="0" y="0" width="3" height="308" rx="1.5" fill="#00d4ff" opacity=".7"/>
@@ -124,7 +116,7 @@
   </g>
 
   <!-- ████ CARD 3: 深度思考 — Row 2 Left ████ -->
-  <g transform="translate(16,228)" class="b3">
+  <g transform="translate(16,228)">
     <rect width="252" height="236" rx="14" fill="#111720" stroke="#1c2535" stroke-width="1"/>
     <rect width="252" height="236" rx="14" fill="url(#g3)"/>
     <rect x="0" y="0" width="3" height="236" rx="1.5" fill="#a855f7" opacity=".7"/>
@@ -148,7 +140,7 @@
   </g>
 
   <!-- ████ CARD 4: 自我纠错 — Row 2 Mid-left ████ -->
-  <g transform="translate(280,228)" class="b4">
+  <g transform="translate(280,228)">
     <rect width="240" height="112" rx="14" fill="#111720" stroke="#1c2535" stroke-width="1"/>
     <rect width="240" height="112" rx="14" fill="url(#g4)"/>
     <rect x="0" y="0" width="3" height="112" rx="1.5" fill="#f59e0b" opacity=".7"/>
@@ -165,7 +157,7 @@
   </g>
 
   <!-- ████ CARD 5: MCP 生态 — Row 3 Mid-left ████ -->
-  <g transform="translate(280,352)" class="b5">
+  <g transform="translate(280,352)">
     <rect width="240" height="112" rx="14" fill="#111720" stroke="#1c2535" stroke-width="1"/>
     <rect width="240" height="112" rx="14" fill="url(#g5)"/>
     <rect x="0" y="0" width="3" height="112" rx="1.5" fill="#3b82f6" opacity=".7"/>
@@ -183,7 +175,7 @@
   </g>
 
   <!-- ████ CARD 6: 极致轻量 — Row 3 Right ████ -->
-  <g transform="translate(532,336)" class="b6">
+  <g transform="translate(532,336)">
     <rect width="252" height="128" rx="14" fill="#111720" stroke="#1c2535" stroke-width="1"/>
     <rect width="252" height="128" rx="14" fill="url(#g6)"/>
     <rect x="0" y="0" width="3" height="128" rx="1.5" fill="#f43f5e" opacity=".7"/>
