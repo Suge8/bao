@@ -111,13 +111,15 @@ class BaseChannel(ABC):
             )
             return
         
+        meta = metadata or {}
         msg = InboundMessage(
             channel=self.name,
             sender_id=str(sender_id),
             chat_id=str(chat_id),
             content=content,
             media=media or [],
-            metadata=metadata or {}
+            metadata=meta,
+            session_key_override=meta.get("session_key"),
         )
         
         await self.bus.publish_inbound(msg)
