@@ -193,8 +193,8 @@ class SlackChannel(BaseChannel):
                         "thread_ts": thread_ts,
                         "channel_type": channel_type,
                     },
-                    "session_key": session_key,
                 },
+                session_key=session_key,
             )
         except Exception:
             logger.exception("Error handling Slack message from {}", sender_id)
