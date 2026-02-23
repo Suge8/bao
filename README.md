@@ -147,6 +147,26 @@ bao
 }
 ```
 
+OpenAI 兼容端点支持 **API 模式自动探测**：首次请求自动检测 Responses API，成功则后续直接使用，否则回退 Chat Completions。结果按 endpoint 持久化缓存（7 天 TTL）。
+
+```json
+{
+  "providers": {
+    "openaiCompatible": {
+      "apiKey": "sk-...",
+      "apiBase": "https://your-proxy.com/v1",
+      "apiMode": "auto"
+    }
+  }
+}
+```
+
+| apiMode | 行为 |
+|---------|------|
+| `"auto"` | 默认。首次探测 Responses API，结果缓存到磁盘 |
+| `"responses"` | 强制走 Responses API |
+| `"completions"` | 强制走 Chat Completions |
+
 ## 🔌 MCP 支持
 
 Model Context Protocol — 接入任何工具生态。配置兼容 **Claude Desktop 和 Cursor**：
@@ -359,6 +379,26 @@ Simplified to 3 types. Covers 99% of what's out there.
   }
 }
 ```
+
+OpenAI-compatible endpoints support **API mode auto-detection**: the first request probes the Responses API — if supported, all subsequent requests use it; otherwise falls back to Chat Completions. Results are cached per endpoint to disk (7-day TTL).
+
+```json
+{
+  "providers": {
+    "openaiCompatible": {
+      "apiKey": "sk-...",
+      "apiBase": "https://your-proxy.com/v1",
+      "apiMode": "auto"
+    }
+  }
+}
+```
+
+| apiMode | Behavior |
+|---------|----------|
+| `"auto"` | Default. Probes Responses API on first request, caches result to disk |
+| `"responses"` | Force Responses API |
+| `"completions"` | Force Chat Completions |
 
 ### 🔌 MCP Support
 
