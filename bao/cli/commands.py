@@ -295,17 +295,21 @@ def gateway(
         if not targets:
             return
 
-        user_md = config.workspace_path / "PERSONA.md"
-        is_new_user = not user_md.exists() or "(your name)" in user_md.read_text(encoding="utf-8")
+        from bao.config.loader import is_new_user
 
-        if is_new_user:
-            prompt = (
-                "You just came online for the first time. "
-                "The user hasn't introduced themselves yet. Guide them through initial setup: "
-                "ask their name, what they'd like to call you, and their preferred communication style. "
-                "Tell them you'll remember these. Keep it brief and natural, not like a form. "
-                "Respond in the user's language based on your PERSONA.md config."
+        if is_new_user(config.workspace_path):
+            picker = (
+                "👋 Welcome to bao!\n"
+                "欢迎使用 bao！\n\n"
+                "Please choose your language / 请选择语言：\n\n"
+                "1. 中文\n"
+                "2. English"
             )
+            for ch, cid in targets:
+                s = agent.sessions.get_or_create(f"{ch}:{cid}")
+                s.metadata["_pending_onboarding_lang"] = True
+                agent.sessions.save(s)
+                await bus.publish_outbound(OutboundMessage(channel=ch, chat_id=cid, content=picker))
         else:
             prompt = (
                 "You just came online. Greet the user in character based on your PERSONA.md personality. "
@@ -313,17 +317,17 @@ def gateway(
                 "Keep it short, like an old friend saying hi."
             )
 
-        try:
-            greeting = await agent.process_direct(prompt, session_key="system:greeting")
-        except Exception as e:
-            logger.warning("Startup greeting failed: {}", e)
-            return
+            try:
+                greeting = await agent.process_direct(prompt, session_key="system:greeting")
+            except Exception as e:
+                logger.warning("Startup greeting failed: {}", e)
+                return
 
-        if greeting:
-            for ch, cid in targets:
-                await bus.publish_outbound(
-                    OutboundMessage(channel=ch, chat_id=cid, content=greeting)
-                )
+            if greeting:
+                for ch, cid in targets:
+                    await bus.publish_outbound(
+                        OutboundMessage(channel=ch, chat_id=cid, content=greeting)
+                    )
 
     async def run():
         try:
