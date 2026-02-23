@@ -36,7 +36,7 @@ _JSONC_TEMPLATE = """\
   "providers": {
     // OpenAI 兼容端点：OpenAI, OpenRouter, DeepSeek, Groq, SiliconFlow, 火山引擎, 阿里云 DashScope, 月之暗面 Moonshot, 智谱 Zhipu, Ollama, LM Studio, vLLM, AiHubMix 等
     // 使用 model 格式: "openai/gpt-4o", "openrouter/anthropic/claude-3.5-sonnet", "deepseek/deepseek-chat" 等
-    "openaiCompatible": { "apiKey": "", "apiBase": "", "extraHeaders": {} },
+    "openaiCompatible": { "apiKey": "", "apiBase": "", "extraHeaders": {}, "apiMode": "auto" },
     // Anthropic 官方: Claude 系列模型
     // 使用 model 格式: "anthropic/claude-opus-4-5", "anthropic/claude-sonnet-4-20250514" 等
     "anthropic": { "apiKey": "" },

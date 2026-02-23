@@ -3,7 +3,7 @@
 from pathlib import Path
 from pydantic import BaseModel, Field, ConfigDict
 from pydantic.alias_generators import to_camel
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Base(BaseModel):
@@ -218,7 +218,8 @@ class ProviderConfig(Base):
 
     api_key: str = ""
     api_base: str | None = None
-    extra_headers: dict[str, str] | None = None  # Custom headers (e.g. APP-Code for AiHubMix)
+    extra_headers: dict[str, str] | None = None
+    api_mode: str = "auto"
 
 
 class ProvidersConfig(Base):
@@ -397,4 +398,4 @@ class Config(BaseSettings):
 
         return None
 
-    model_config = ConfigDict(env_prefix="bao_", env_nested_delimiter="__")
+    model_config = SettingsConfigDict(env_prefix="bao_", env_nested_delimiter="__")
