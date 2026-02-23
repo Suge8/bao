@@ -469,6 +469,45 @@ class AgentLoop:
             self.sessions.save(session)
             return self._select_session(int(cmd), msg, natural_key)
 
+        # Onboarding: language selection
+        pending_lang = session.metadata.pop("_pending_onboarding_lang", None)
+        if pending_lang and cmd in ("1", "2"):
+            from bao.config.loader import apply_persona_language
+            lang = "zh" if cmd == "1" else "en"
+            apply_persona_language(self.workspace, lang)
+            self.context = ContextBuilder(self.workspace, embedding_config=self.embedding_config)
+            self.context = ContextBuilder(self.workspace, embedding_config=self.embedding_config)
+            if cmd == "1":
+                prompt = (
+                    "你刚刚上线，这是用户第一次使用。"
+                    "用户还没有自我介绍。引导他们完成初始设置："
+                    "问他们的名字、想怎么称呼你、以及偏好的沟通风格。"
+                    "告诉他们你会记住这些。保持简短自然，不要像填表格。"
+                    "全程使用中文。"
+                )
+            else:
+                prompt = (
+                    "You just came online for the first time. "
+                    "The user hasn't introduced themselves yet. Guide them through initial setup: "
+                    "ask their name, what they'd like to call you, and their preferred communication style. "
+                    "Tell them you'll remember these. Keep it brief and natural, not like a form. "
+                    "Respond in English."
+                )
+            self.sessions.save(session)
+            self.sessions.save(session)
+            greeting = await self.process_direct(prompt, session_key=key)
+            return self._reply(msg, greeting) if greeting else None
+        elif pending_lang:
+            # Invalid input — re-prompt
+            session.metadata["_pending_onboarding_lang"] = True
+            self.sessions.save(session)
+            return self._reply(
+                msg,
+                "Please reply 1 or 2 / 请回复 1 或 2\n\n"
+                "1. 中文\n"
+                "2. English",
+            )
+
         if len(session.messages) > self.memory_window and session.key not in self._consolidating:
             self._consolidating.add(session.key)
 

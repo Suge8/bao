@@ -177,6 +177,17 @@ _WORKSPACE_TEMPLATES: dict[str, str] = {
 - 默认输出 INFO 级别日志（简洁）
 - 使用 `bao gateway -v` 启用 DEBUG 级别详细日志
 
+## 首次使用引导（Onboarding）
+
+Gateway 启动时自动检测 `PERSONA.md` 是否仍为模板状态。
+若是新用户，系统会发送双语语言选择器（不调用 LLM），用户回复 1（中文）或 2（English）后：
+
+1. `PERSONA.md` 被覆写为对应语言的模板
+2. 你收到引导提示，用选定语言与用户完成初始设置（姓名、昵称、沟通风格）
+3. 收集到信息后，立即用 `edit_file` 写入 `PERSONA.md`
+
+引导完成后，后续启动走正常问候流程。
+
 ## 身份与偏好持久化
 
 当用户告诉你以下内容时，立即使用 `edit_file` 更新 `PERSONA.md`：
@@ -227,6 +238,51 @@ bao cron add --name "提醒" --message "你的消息" --at "YYYY-MM-DDTHH:MM:SS"
 
 """,
 }
+
+_PERSONA_EN = """# Persona
+
+## Identity
+
+I am bao, a lightweight AI assistant.
+
+- Helpful, friendly
+- Concise, to the point
+- Curious, eager to learn
+- Accuracy over speed
+- Protect user privacy and security
+- Transparent in actions
+
+## User
+
+- **Name**: (your name)
+- **Timezone**: (your timezone)
+- **Language**: English
+- **Communication style**: (casual/formal)
+- **Role**: (your role, e.g. developer, researcher)
+- **Interests**: (topics you care about)
+
+## Special Instructions
+
+(Any specific instructions for the assistant)
+"""
+
+_ONBOARDING_MARKERS = ("（你的名字）", "(your name)")
+
+
+def is_new_user(workspace: Path) -> bool:
+    """Check if PERSONA.md is still in template state."""
+    persona = workspace / "PERSONA.md"
+    if not persona.exists():
+        return True
+    content = persona.read_text(encoding="utf-8")
+    return any(marker in content for marker in _ONBOARDING_MARKERS)
+
+
+def apply_persona_language(workspace: Path, lang: str) -> None:
+    """Overwrite PERSONA.md with the chosen language template."""
+    persona = workspace / "PERSONA.md"
+    template = _PERSONA_EN if lang == "en" else _WORKSPACE_TEMPLATES["PERSONA.md"]
+    persona.write_text(template, encoding="utf-8")
 
 
 def get_config_path() -> Path:
