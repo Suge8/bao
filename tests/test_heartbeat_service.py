@@ -3,19 +3,23 @@ import asyncio
 import pytest
 
 from nanobot.heartbeat.service import (
+    HEARTBEAT_OK_TOKEN,
     HeartbeatService,
-    _is_heartbeat_ok_response,
 )
 
 
-def test_heartbeat_ok_response_requires_exact_token() -> None:
-    assert _is_heartbeat_ok_response("HEARTBEAT_OK")
-    assert _is_heartbeat_ok_response("`HEARTBEAT_OK`")
-    assert _is_heartbeat_ok_response("**HEARTBEAT_OK**")
+def test_heartbeat_ok_detection() -> None:
+    def is_ok(response: str) -> bool:
+        return HEARTBEAT_OK_TOKEN in response.upper()
 
-    assert not _is_heartbeat_ok_response("HEARTBEAT_OK, done")
-    assert not _is_heartbeat_ok_response("done HEARTBEAT_OK")
-    assert not _is_heartbeat_ok_response("HEARTBEAT_NOT_OK")
+    assert is_ok("HEARTBEAT_OK")
+    assert is_ok("`HEARTBEAT_OK`")
+    assert is_ok("**HEARTBEAT_OK**")
+    assert is_ok("heartbeat_ok")
+    assert is_ok("HEARTBEAT_OK.")
+
+    assert not is_ok("HEARTBEAT_NOT_OK")
+    assert not is_ok("all good")
 
 
 @pytest.mark.asyncio
