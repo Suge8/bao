@@ -187,13 +187,22 @@ class ChannelManager:
                 logger.error("Error stopping {}: {}", name, e)
 
     async def _dispatch_outbound(self) -> None:
-        """Dispatch outbound messages to the appropriate channel."""
+        """Dispatch outbound messages to the appropriate channel.
+        Progress and tool-hint messages are gated by config so that
+        internal traces never leak to external chat channels.
+        """
         logger.debug("Outbound dispatcher started")
-
+        defaults = self.config.agents.defaults
         while True:
             try:
                 msg = await asyncio.wait_for(self.bus.consume_outbound(), timeout=1.0)
-
+                # Gate: drop progress / tool-hint messages unless config opts in
+                if msg.metadata.get("_progress"):
+                    is_tool_hint = msg.metadata.get("_tool_hint", False)
+                    if is_tool_hint and not defaults.send_tool_hints:
+                        continue
+                    if not is_tool_hint and not defaults.send_progress:
+                        continue
                 channel = self.channels.get(msg.channel)
                 if channel:
                     try:
@@ -202,7 +211,6 @@ class ChannelManager:
                         logger.error("Error sending to {}: {}", msg.channel, e)
                 else:
                     logger.warning("Unknown channel: {}", msg.channel)
-
             except asyncio.TimeoutError:
                 continue
             except asyncio.CancelledError:
