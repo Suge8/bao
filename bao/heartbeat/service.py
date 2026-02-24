@@ -72,10 +72,11 @@ class HeartbeatService:
 
     async def start(self) -> None:
         """Start the heartbeat service."""
+        if self._running:
+            return
         if not self.enabled:
             logger.info("Heartbeat disabled")
             return
-
         self._running = True
         self._task = asyncio.create_task(self._run_loop())
         logger.info("Heartbeat started (every {}s)", self.interval_s)
