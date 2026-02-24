@@ -246,6 +246,11 @@ class SessionManager:
         except Exception:
             pass
         self._cache.pop(key, None)
+        try:
+            from bao.agent.artifacts import ArtifactStore
+            ArtifactStore(self.workspace, key, 0).cleanup_session()
+        except Exception:
+            pass
         return True
 
     def get_active_session_key(self, natural_key: str) -> str | None:
