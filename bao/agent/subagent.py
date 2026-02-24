@@ -47,7 +47,7 @@ class SubagentManager:
         self,
         task: str,
         label: str | None = None,
-        origin_channel: str = "cli",
+        origin_channel: str = "gateway",
         origin_chat_id: str = "direct",
     ) -> str:
         task_id = str(uuid.uuid4())[:8]
@@ -58,7 +58,7 @@ class SubagentManager:
         self._running_tasks[task_id] = bg_task
 
         bg_task.add_done_callback(lambda _: self._running_tasks.pop(task_id, None))
-        
+
         logger.info("Spawned subagent [{}]: {}", task_id, display_label)
         return f"Subagent [{display_label}] started (id: {task_id}). I'll notify you when it completes."
 
@@ -71,7 +71,7 @@ class SubagentManager:
     ) -> None:
         """Execute the subagent task and announce the result."""
         logger.info("Subagent [{}] starting task: {}", task_id, label)
-        
+
         try:
             tools = ToolRegistry()
             allowed_dir = self.workspace if self.restrict_to_workspace else None
@@ -79,11 +79,13 @@ class SubagentManager:
             tools.register(WriteFileTool(workspace=self.workspace, allowed_dir=allowed_dir))
             tools.register(EditFileTool(workspace=self.workspace, allowed_dir=allowed_dir))
             tools.register(ListDirTool(workspace=self.workspace, allowed_dir=allowed_dir))
-            tools.register(ExecTool(
-                working_dir=str(self.workspace),
-                timeout=self.exec_config.timeout,
-                restrict_to_workspace=self.restrict_to_workspace,
-            ))
+            tools.register(
+                ExecTool(
+                    working_dir=str(self.workspace),
+                    timeout=self.exec_config.timeout,
+                    restrict_to_workspace=self.restrict_to_workspace,
+                )
+            )
             search_tool = WebSearchTool(search_config=self.search_config)
             has_search = bool(search_tool.brave_key or search_tool.tavily_key)
             if has_search:
@@ -137,7 +139,12 @@ class SubagentManager:
 
                     for tool_call in response.tool_calls:
                         args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
-                        logger.debug("Subagent [{}] executing: {} with arguments: {}", task_id, tool_call.name, args_str)
+                        logger.debug(
+                            "Subagent [{}] executing: {} with arguments: {}",
+                            task_id,
+                            tool_call.name,
+                            args_str,
+                        )
                         result = await tools.execute(tool_call.name, tool_call.arguments)
                         messages.append(
                             {
@@ -180,7 +187,7 @@ class SubagentManager:
 
             if final_result is None:
                 final_result = "Task completed but no final response was generated."
-            
+
             logger.info("Subagent [{}] completed successfully", task_id)
             await self._announce_result(task_id, label, task, final_result, origin, "ok")
 
@@ -217,8 +224,10 @@ Summarize this naturally for the user. Keep it brief (1-2 sentences). Do not men
         )
 
         await self.bus.publish_inbound(msg)
-        logger.debug("Subagent [{}] announced result to {}:{}", task_id, origin['channel'], origin['chat_id'])
-    
+        logger.debug(
+            "Subagent [{}] announced result to {}:{}", task_id, origin["channel"], origin["chat_id"]
+        )
+
     def _build_subagent_prompt(self, task: str, has_search: bool = False) -> str:
         """Build a focused system prompt for the subagent."""
         from datetime import datetime
