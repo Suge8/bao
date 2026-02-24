@@ -129,7 +129,7 @@ class MemoryStore:
             if isinstance(args, str):
                 args = json.loads(args)
             if not isinstance(args, dict):
-                logger.warning("Memory consolidation: unexpected arguments type %s", type(args).__name__)
+                logger.warning("Memory consolidation: unexpected arguments type {}", type(args).__name__)
                 return False
 
             if entry := args.get("history_entry"):
