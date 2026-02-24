@@ -3,6 +3,8 @@
 import base64
 import mimetypes
 import platform
+import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -103,32 +105,21 @@ Reply directly with text for conversations. Only use the 'message' tool to send 
 - Recall past events: grep {workspace_path}/memory/HISTORY.md"""
 
     @staticmethod
-    def _build_runtime_context(channel: str | None, chat_id: str | None) -> str:
-        """Build dynamic runtime context and attach it to the tail user message."""
-        from datetime import datetime
-        import time as _time
-
+    def _inject_runtime_context(
+        user_content: str | list[dict[str, Any]],
+        channel: str | None,
+        chat_id: str | None,
+    ) -> str | list[dict[str, Any]]:
+        """Append dynamic runtime context to the tail of the user message."""
         now = datetime.now().strftime("%Y-%m-%d %H:%M (%A)")
-        tz = _time.strftime("%Z") or "UTC"
+        tz = time.strftime("%Z") or "UTC"
         lines = [f"Current Time: {now} ({tz})"]
         if channel and chat_id:
-            lines.append(f"Channel: {channel}")
-            lines.append(f"Chat ID: {chat_id}")
-        return "\n".join(lines)
-
-    @staticmethod
-    def _append_runtime_context(
-        user_content: str | list[dict[str, Any]],
-        runtime_context: str,
-    ) -> str | list[dict[str, Any]]:
-        """Append runtime context at the tail of the user message."""
-        runtime_block = f"[Runtime Context]\n{runtime_context}"
+            lines += [f"Channel: {channel}", f"Chat ID: {chat_id}"]
+        block = "[Runtime Context]\n" + "\n".join(lines)
         if isinstance(user_content, str):
-            return f"{user_content}\n\n{runtime_block}"
-
-        content = list(user_content)
-        content.append({"type": "text", "text": runtime_block})
-        return content
+            return f"{user_content}\n\n{block}"
+        return [*user_content, {"type": "text", "text": block}]
     
     def _load_bootstrap_files(self) -> str:
         """Load all bootstrap files from workspace."""
@@ -176,10 +167,7 @@ Reply directly with text for conversations. Only use the 'message' tool to send 
 
         # Current message (with optional image attachments)
         user_content = self._build_user_content(current_message, media)
-        user_content = self._append_runtime_context(
-            user_content=user_content,
-            runtime_context=self._build_runtime_context(channel, chat_id),
-        )
+        user_content = self._inject_runtime_context(user_content, channel, chat_id)
         messages.append({"role": "user", "content": user_content})
 
         return messages
