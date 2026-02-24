@@ -284,11 +284,19 @@ class DiscordChannel(BaseChannel):
         async def typing_loop() -> None:
             url = f"{DISCORD_API_BASE}/channels/{channel_id}/typing"
             headers = {"Authorization": f"Bot {self.config.token}"}
+            consecutive_failures = 0
             while self._running:
                 try:
                     await self._http.post(url, headers=headers)
+                    consecutive_failures = 0
                 except Exception:
-                    pass
+                    consecutive_failures += 1
+                    if consecutive_failures >= 3:
+                        logger.warning(
+                            "Discord typing stopped: {} consecutive HTTP failures for channel {}",
+                            consecutive_failures, channel_id,
+                        )
+                        break
                 await asyncio.sleep(8)
 
         self._typing_tasks[channel_id] = asyncio.create_task(typing_loop())
