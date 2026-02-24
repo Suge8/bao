@@ -241,22 +241,11 @@ class SlackChannel(BaseChannel):
         if not text:
             return ""
         text = cls._TABLE_RE.sub(cls._convert_table, text)
-        text = slackify_markdown(text)
-        text = cls._fixup_mrkdwn(text)
-        return text
+        return cls._fixup_mrkdwn(slackify_markdown(text))
 
     @classmethod
     def _fixup_mrkdwn(cls, text: str) -> str:
-        """Fix markdown artifacts that slackify_markdown misses.
-
-        The slackify_markdown library uses markdown-it which requires certain
-        boundary conditions for emphasis.  Patterns like ``**key:**value``
-        (closing ``**`` immediately followed by non-space) are not recognised
-        as bold and pass through as literal asterisks.  This method catches
-        those leftovers, stray ``## headers``, and over-escaped ``&amp;`` in
-        bare URLs, while leaving code spans untouched.
-        """
-        # Protect code blocks from further processing
+        """Fix markdown artifacts that slackify_markdown misses."""
         code_blocks: list[str] = []
 
         def _save_code(m: re.Match) -> str:
@@ -265,19 +254,12 @@ class SlackChannel(BaseChannel):
 
         text = cls._CODE_FENCE_RE.sub(_save_code, text)
         text = cls._INLINE_CODE_RE.sub(_save_code, text)
-
         text = cls._LEFTOVER_BOLD_RE.sub(r"*\1*", text)
         text = cls._LEFTOVER_HEADER_RE.sub(r"*\1*", text)
+        text = cls._BARE_URL_RE.sub(lambda m: m.group(0).replace("&amp;", "&"), text)
 
-        # Fix &amp; in bare URLs that the library over-escaped
-        text = cls._BARE_URL_RE.sub(
-            lambda m: m.group(0).replace("&amp;", "&"), text
-        )
-
-        # Restore code blocks
         for i, block in enumerate(code_blocks):
             text = text.replace(f"\x00CB{i}\x00", block)
-
         return text
 
     @staticmethod
