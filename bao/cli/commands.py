@@ -70,7 +70,7 @@ def run_gateway(port: int, verbose: bool) -> None:
     cron_status = stack.cron.status()
     if cron_status["jobs"] > 0:
         console.print(f"  ⏰ 定时任务 / Cron: {cron_status['jobs']} jobs")
-    console.print("  💓 心跳检查 / Heartbeat: every 30m")
+    console.print(f"  💓 心跳检查 / Heartbeat: every {stack.heartbeat.interval_s}s")
 
     async def run() -> None:
         try:

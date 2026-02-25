@@ -3,7 +3,7 @@
 import base64
 import mimetypes
 import platform
-import time as _time
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -50,8 +50,6 @@ Skills with available="false" need dependencies installed first - you can try in
         return "\n\n---\n\n".join(parts)
 
     def _get_identity(self) -> str:
-        now = datetime.now().strftime("%Y-%m-%d %H:%M (%A)")
-        tz = _time.strftime("%Z") or "UTC"
         workspace_path = str(self.workspace.expanduser().resolve())
         system = platform.system()
         runtime = f"{'macOS' if system == 'Darwin' else system} {platform.machine()}, Python {platform.python_version()}"
@@ -69,9 +67,6 @@ You are bao, a helpful AI assistant. You have access to tools that allow you to:
 - Fetch and read web pages
 - Send messages to users on chat channels
 - Spawn subagents for complex background tasks
-
-## Current Time
-{now} ({tz})
 
 ## Runtime
 {runtime}
@@ -97,6 +92,23 @@ For complex tasks that require multiple steps or tool usage:
 5. Before responding, verify your answer fully addresses the original question
 
 For simple questions or greetings, respond directly without over-thinking."""
+
+    @staticmethod
+    def _inject_runtime_context(
+        user_content: str | list[dict[str, Any]],
+        channel: str | None,
+        chat_id: str | None,
+    ) -> str | list[dict[str, Any]]:
+        """Append dynamic runtime context to the tail of the user message."""
+        now = datetime.now().strftime("%Y-%m-%d %H:%M (%A)")
+        tz = time.strftime("%Z") or "UTC"
+        lines = [f"Current Time: {now} ({tz})"]
+        if channel and chat_id:
+            lines += [f"Channel: {channel}", f"Chat ID: {chat_id}"]
+        block = "[Runtime Context]\n" + "\n".join(lines)
+        if isinstance(user_content, str):
+            return f"{user_content}\n\n{block}"
+        return [*user_content, {"type": "text", "text": block}]
 
     def _load_bootstrap_files(self) -> str:
         parts = []
@@ -132,13 +144,12 @@ For simple questions or greetings, respond directly without over-thinking."""
                 + "\n---\n".join(related_experience)
             )
 
-        if channel and chat_id:
-            system_prompt += f"\n\n## Current Session\nChannel: {channel}\nChat ID: {chat_id}"
         messages.append({"role": "system", "content": system_prompt})
 
         messages.extend(history)
 
         user_content = self._build_user_content(current_message, media)
+        user_content = self._inject_runtime_context(user_content, channel, chat_id)
         messages.append({"role": "user", "content": user_content})
 
         return messages

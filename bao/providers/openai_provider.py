@@ -17,7 +17,7 @@ from bao.providers.responses_compat import (
     parse_responses_json,
 )
 
-_ALLOWED_MSG_KEYS = frozenset({"role", "content", "tool_calls", "tool_call_id", "name"})
+_ALLOWED_MSG_KEYS = frozenset({"role", "content", "tool_calls", "tool_call_id", "name", "reasoning_content"})
 
 _PROBE_FALLBACK_CODES = frozenset({404, 405, 501})
 

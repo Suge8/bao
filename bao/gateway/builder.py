@@ -84,14 +84,45 @@ def build_gateway_stack(config: Any, provider: Any) -> GatewayStack:
     cron.on_job = on_cron_job
 
     # --- heartbeat ---
-    async def on_heartbeat(prompt: str) -> str:
-        return await agent.process_direct(prompt, session_key="heartbeat")
+    async def on_heartbeat_execute(tasks: str) -> str:
+        """Phase 2: execute heartbeat tasks through the full agent loop."""
+        channel, chat_id = "cli", "direct"
+        for ch_name in ("telegram", "whatsapp", "discord", "slack", "feishu", "dingtalk", "qq"):
+            ch_cfg = getattr(config.channels, ch_name, None)
+            if ch_cfg and getattr(ch_cfg, "enabled", False) and getattr(ch_cfg, "allow_from", None):
+                channel = ch_name
+                chat_id = ch_cfg.allow_from[0].split("|")[0]
+                break
 
+        async def _silent(*_args, **_kwargs):
+            pass
+
+        return await agent.process_direct(
+            tasks,
+            session_key="heartbeat",
+            channel=channel,
+            chat_id=chat_id,
+            on_progress=_silent,
+        )
+
+    async def on_heartbeat_notify(response: str) -> None:
+        """Deliver heartbeat result to the first available channel."""
+        for ch_name in ("telegram", "whatsapp", "discord", "slack", "feishu", "dingtalk", "qq"):
+            ch_cfg = getattr(config.channels, ch_name, None)
+            if ch_cfg and getattr(ch_cfg, "enabled", False) and getattr(ch_cfg, "allow_from", None):
+                chat_id = ch_cfg.allow_from[0].split("|")[0]
+                await bus.publish_outbound(OutboundMessage(channel=ch_name, chat_id=chat_id, content=response))
+                return
+
+    hb_cfg = config.gateway.heartbeat
     heartbeat = HeartbeatService(
         workspace=config.workspace_path,
-        on_heartbeat=on_heartbeat,
-        interval_s=30 * 60,
-        enabled=True,
+        provider=provider,
+        model=agent.model,
+        on_execute=on_heartbeat_execute,
+        on_notify=on_heartbeat_notify,
+        interval_s=hb_cfg.interval_s,
+        enabled=hb_cfg.enabled,
     )
 
     channels = ChannelManager(config, bus)
