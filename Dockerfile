@@ -37,4 +37,4 @@ RUN mkdir -p /root/.bao
 EXPOSE 18790
 
 ENTRYPOINT ["bao"]
-CMD ["status"]
+

@@ -9,7 +9,7 @@ services:
   bao-gateway:
     container_name: bao-gateway
     <<: *common-config
-    command: ["gateway"]
+    command: []
     restart: unless-stopped
     ports:
       - 18790:18790
