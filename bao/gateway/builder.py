@@ -111,7 +111,9 @@ def build_gateway_stack(config: Any, provider: Any) -> GatewayStack:
             ch_cfg = getattr(config.channels, ch_name, None)
             if ch_cfg and getattr(ch_cfg, "enabled", False) and getattr(ch_cfg, "allow_from", None):
                 chat_id = ch_cfg.allow_from[0].split("|")[0]
-                await bus.publish_outbound(OutboundMessage(channel=ch_name, chat_id=chat_id, content=response))
+                await bus.publish_outbound(
+                    OutboundMessage(channel=ch_name, chat_id=chat_id, content=response)
+                )
                 return
 
     hb_cfg = config.gateway.heartbeat
@@ -182,9 +184,7 @@ async def send_startup_greeting(agent: Any, bus: Any, config: Any) -> None:
     if stage == "persona_setup":
         greeting = PERSONA_GREETING[infer_language(config.workspace_path)]
         for ch, cid in targets:
-            await bus.publish_outbound(
-                OutboundMessage(channel=ch, chat_id=cid, content=greeting)
-            )
+            await bus.publish_outbound(OutboundMessage(channel=ch, chat_id=cid, content=greeting))
         return
 
     prompt = (
@@ -200,6 +200,20 @@ async def send_startup_greeting(agent: Any, bus: Any, config: Any) -> None:
 
     if greeting:
         for ch, cid in targets:
-            await bus.publish_outbound(
-                OutboundMessage(channel=ch, chat_id=cid, content=greeting)
-            )
+            await bus.publish_outbound(OutboundMessage(channel=ch, chat_id=cid, content=greeting))
+
+
+async def shutdown_gateway_stack(stack: GatewayStack, background_tasks: list[Any]) -> None:
+    """Shutdown all gateway services. Mirrors CLI finally block."""
+    for t in background_tasks:
+        t.cancel()
+    if stack.agent:
+        await stack.agent.close_mcp()
+    if stack.heartbeat:
+        stack.heartbeat.stop()
+    if stack.cron:
+        stack.cron.stop()
+    if stack.agent:
+        stack.agent.stop()
+    if stack.channels:
+        await stack.channels.stop_all()

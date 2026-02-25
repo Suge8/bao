@@ -134,7 +134,7 @@ pip install bao-ai
 
 ```bash
 sudo useradd -m -s /bin/bash bao
-sudo -u bao bao gateway
+sudo -u bao bao
 ```
 
 ### 权限设置
