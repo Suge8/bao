@@ -231,11 +231,18 @@ class ProviderConfig(Base):
     api_mode: str = "auto"  # auto | responses | completions (openai_compatible only)
 
 
+class HeartbeatConfig(Base):
+    """Heartbeat service configuration."""
+    enabled: bool = True
+    interval_s: int = 30 * 60  # 30 minutes
+
+
 class GatewayConfig(Base):
     """Gateway/server configuration."""
 
     host: str = "0.0.0.0"
     port: int = 18790
+    heartbeat: HeartbeatConfig = Field(default_factory=HeartbeatConfig)
 
 
 class EmbeddingConfig(Base):
