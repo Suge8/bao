@@ -10,6 +10,7 @@ from bao.bus.events import OutboundMessage
 from bao.bus.queue import MessageBus
 from bao.channels.base import BaseChannel
 from bao.config.schema import WhatsAppConfig
+from bao.channels.progress_text import ProgressBuffer
 
 
 class WhatsAppChannel(BaseChannel):
@@ -27,6 +28,7 @@ class WhatsAppChannel(BaseChannel):
         self.config: WhatsAppConfig = config
         self._ws = None
         self._connected = False
+        self._progress = ProgressBuffer(self._send_text)
 
     async def start(self) -> None:
         """Start the WhatsApp channel by connecting to the bridge."""
@@ -73,27 +75,38 @@ class WhatsAppChannel(BaseChannel):
 
     async def stop(self) -> None:
         """Stop the WhatsApp channel."""
+        await self._progress.flush_all()
         self._running = False
         self._connected = False
-
         if self._ws:
             await self._ws.close()
             self._ws = None
 
     async def send(self, msg: OutboundMessage) -> None:
         """Send a message through WhatsApp."""
+        meta = msg.metadata or {}
+        await self._progress.handle(
+            msg.chat_id,
+            msg.content or "",
+            is_progress=bool(meta.get("_progress")),
+            is_tool_hint=bool(meta.get("_tool_hint")),
+        )
+
+    async def _send_text(self, chat_id: str, text: str) -> None:
+        """Send raw text via WebSocket bridge."""
         if not self._ws or not self._connected:
             logger.warning("WhatsApp bridge not connected")
             return
-
         try:
-            payload = {"type": "send", "to": msg.chat_id, "text": msg.content}
+            payload = {"type": "send", "to": chat_id, "text": text}
             await self._ws.send(json.dumps(payload, ensure_ascii=False))
         except Exception as e:
             logger.error("Error sending WhatsApp message: {}", e)
 
-    async def _handle_bridge_message(self, raw: str) -> None:
+    async def _handle_bridge_message(self, raw: str | bytes) -> None:
         """Handle a message from the bridge."""
+        if isinstance(raw, bytes):
+            raw = raw.decode("utf-8", errors="replace")
         try:
             data = json.loads(raw)
         except json.JSONDecodeError:
