@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any
+import json
+from typing import Any, Awaitable, Callable
 
 import httpx
 from loguru import logger
@@ -39,12 +40,14 @@ class OpenAICompatibleProvider(LLMProvider):
         extra_headers: dict[str, str] | None = None,
         provider_name: str | None = None,
         api_mode: str = "auto",
+        model_prefix: str | None = None,
     ):
         super().__init__(api_key, api_base)
         self.default_model = default_model
         self.extra_headers = extra_headers or {}
         self.provider_name = provider_name or "openai"
         self._api_mode = api_mode
+        self._model_prefix = (model_prefix or "").strip().lower()
         self._effective_base = api_base or "https://api.openai.com/v1"
 
         headers = {"User-Agent": "bao/1.0"}
@@ -60,6 +63,8 @@ class OpenAICompatibleProvider(LLMProvider):
         )
 
     def _resolve_model(self, model: str) -> str:
+        if self._model_prefix and model.lower().startswith(f"{self._model_prefix}/"):
+            return model.split("/", 1)[1]
         prefixes_to_strip = (
             "openrouter/",
             "deepseek/",
@@ -139,6 +144,40 @@ class OpenAICompatibleProvider(LLMProvider):
             usage=usage,
         )
 
+    @staticmethod
+    def _decode_responses_payload(resp: httpx.Response) -> dict[str, Any]:
+        try:
+            payload = resp.json()
+            if isinstance(payload, dict):
+                return payload
+        except Exception:
+            pass
+
+        latest_response: dict[str, Any] | None = None
+        for raw_line in (resp.text or "").splitlines():
+            line = raw_line.strip()
+            if not line.startswith("data:"):
+                continue
+            data = line[5:].strip()
+            if not data or data == "[DONE]":
+                continue
+            try:
+                event = json.loads(data)
+            except Exception:
+                continue
+            if not isinstance(event, dict):
+                continue
+            if isinstance(event.get("response"), dict):
+                latest_response = event["response"]
+                if event.get("type") == "response.completed":
+                    break
+            elif event.get("object") == "response":
+                latest_response = event
+
+        if latest_response is None:
+            raise ValueError("Cannot decode Responses payload")
+        return latest_response
+
     async def chat(
         self,
         messages: list[dict[str, Any]],
@@ -146,6 +185,7 @@ class OpenAICompatibleProvider(LLMProvider):
         model: str | None = None,
         max_tokens: int = 4096,
         temperature: float = 0.7,
+        on_progress: Callable[[str], Awaitable[None]] | None = None,
         **extra: Any,
     ) -> LLMResponse:
         original_model = model or self.default_model
@@ -155,18 +195,21 @@ class OpenAICompatibleProvider(LLMProvider):
             messages, tools = self._apply_cache_control(messages, tools)
 
         max_tokens = max(1, max_tokens)
+        source = str(extra.get("source", "main"))
         mode = self._resolve_effective_mode()
 
         if mode == "responses":
             return await self._chat_responses(
-                resolved_model, messages, tools, max_tokens, temperature
+                resolved_model, messages, tools, max_tokens, temperature, on_progress, source
             )
         if mode == "completions":
             return await self._chat_completions(
-                resolved_model, messages, tools, max_tokens, temperature
+                resolved_model, messages, tools, max_tokens, temperature, on_progress, source
             )
 
-        return await self._chat_with_probe(resolved_model, messages, tools, max_tokens, temperature)
+        return await self._chat_with_probe(
+            resolved_model, messages, tools, max_tokens, temperature, on_progress, source
+        )
 
     async def _chat_completions(
         self,
@@ -175,20 +218,90 @@ class OpenAICompatibleProvider(LLMProvider):
         tools: list[dict[str, Any]] | None,
         max_tokens: int,
         temperature: float,
+        on_progress: Callable[[str], Awaitable[None]] | None = None,
+        source: str = "main",
     ) -> LLMResponse:
+        del source
         params: dict[str, Any] = {
             "model": model,
             "messages": self._sanitize_messages(messages),
             "max_tokens": max_tokens,
             "temperature": temperature,
+            "stream": True,
         }
         if tools:
             params["tools"] = tools
             params["tool_choice"] = "auto"
 
         try:
-            response = await self._client.chat.completions.create(**params)
-            return self._parse_completions_response(response)
+            stream = await self._client.chat.completions.create(**params)
+            content = ""
+            tool_calls_acc: dict[int, dict[str, Any]] = {}
+            finish_reason = "stop"
+            usage: dict[str, int] = {}
+            reasoning_content: str | None = None
+
+            async for chunk in stream:
+                if not chunk.choices:
+                    # usage-only chunk (stream_options)
+                    if hasattr(chunk, "usage") and chunk.usage:
+                        usage = {
+                            "prompt_tokens": chunk.usage.prompt_tokens or 0,
+                            "completion_tokens": chunk.usage.completion_tokens or 0,
+                            "total_tokens": chunk.usage.total_tokens or 0,
+                        }
+                    continue
+                delta = chunk.choices[0].delta
+                # Text delta
+                if delta.content:
+                    content += delta.content
+                    if on_progress:
+                        await on_progress(delta.content)
+                # Reasoning delta (DeepSeek-R1 etc.)
+                rc = getattr(delta, "reasoning_content", None)
+                if rc:
+                    if reasoning_content is None:
+                        reasoning_content = ""
+                    reasoning_content += rc
+                # Tool call delta
+                if delta.tool_calls:
+                    for tc in delta.tool_calls:
+                        idx = tc.index
+                        if idx not in tool_calls_acc:
+                            tool_calls_acc[idx] = {
+                                "id": tc.id or "",
+                                "name": tc.function.name or "",
+                                "args": "",
+                            }
+                        if tc.function and tc.function.arguments:
+                            tool_calls_acc[idx]["args"] += tc.function.arguments
+                        if tc.id:
+                            tool_calls_acc[idx]["id"] = tc.id
+                        if tc.function and tc.function.name:
+                            tool_calls_acc[idx]["name"] = tc.function.name
+                # Finish reason
+                if chunk.choices[0].finish_reason:
+                    finish_reason = chunk.choices[0].finish_reason
+
+            # Parse accumulated tool calls
+            from bao.providers.base import ToolCallRequest
+            import json_repair
+
+            parsed_tools = []
+            for idx in sorted(tool_calls_acc):
+                tc = tool_calls_acc[idx]
+                args = json_repair.loads(tc["args"]) if tc["args"] else {}
+                if not isinstance(args, dict):
+                    args = {}
+                parsed_tools.append(ToolCallRequest(id=tc["id"], name=tc["name"], arguments=args))
+
+            return LLMResponse(
+                content=content or None,
+                tool_calls=parsed_tools,
+                finish_reason=finish_reason,
+                usage=usage,
+                reasoning_content=reasoning_content,
+            )
         except Exception as e:
             return LLMResponse(content=f"Error calling LLM: {e}", finish_reason="error")
 
@@ -229,7 +342,11 @@ class OpenAICompatibleProvider(LLMProvider):
         tools: list[dict[str, Any]] | None,
         max_tokens: int,
         temperature: float,
+        on_progress: Callable[[str], Awaitable[None]] | None = None,
+        source: str = "main",
     ) -> LLMResponse:
+        del on_progress
+        del source
         body = self._build_responses_body(model, messages, tools, max_tokens, temperature)
         url = f"{self._effective_base.rstrip('/')}/responses"
         headers = self._build_responses_headers()
@@ -239,7 +356,7 @@ class OpenAICompatibleProvider(LLMProvider):
                 resp = await client.post(url, headers=headers, json=body)
             if resp.status_code != 200:
                 raise RuntimeError(f"Responses API HTTP {resp.status_code}: {resp.text[:500]}")
-            return self._build_responses_result(resp.json())
+            return self._build_responses_result(self._decode_responses_payload(resp))
         except Exception as e:
             return LLMResponse(content=f"Error calling Responses API: {e}", finish_reason="error")
 
@@ -250,6 +367,8 @@ class OpenAICompatibleProvider(LLMProvider):
         tools: list[dict[str, Any]] | None,
         max_tokens: int,
         temperature: float,
+        on_progress: Callable[[str], Awaitable[None]] | None = None,
+        source: str = "main",
     ) -> LLMResponse:
         body = self._build_responses_body(model, messages, tools, max_tokens, temperature)
         url = f"{self._effective_base.rstrip('/')}/responses"
@@ -261,23 +380,42 @@ class OpenAICompatibleProvider(LLMProvider):
 
             if resp.status_code in _PROBE_FALLBACK_CODES:
                 logger.info(
-                    f"Responses API not supported ({resp.status_code}), "
-                    "falling back to Chat Completions"
+                    "[{}] Responses API not supported ({}), falling back to Chat Completions",
+                    source,
+                    resp.status_code,
                 )
                 set_cached_mode(self._effective_base, "completions")
-                return await self._chat_completions(model, messages, tools, max_tokens, temperature)
+                return await self._chat_completions(
+                    model, messages, tools, max_tokens, temperature, on_progress, source
+                )
 
             if resp.status_code == 200:
                 set_cached_mode(self._effective_base, "responses")
-                logger.info("Responses API detected, cached for future requests")
-                return self._build_responses_result(resp.json())
+                logger.info("[{}] Responses API detected, cached for future requests", source)
+                return self._build_responses_result(self._decode_responses_payload(resp))
 
-            logger.warning(f"Responses API returned {resp.status_code}, trying Chat Completions")
-            return await self._chat_completions(model, messages, tools, max_tokens, temperature)
+            logger.warning(
+                "[{}] Responses API returned {} for model={} base={}, trying Chat Completions",
+                source,
+                resp.status_code,
+                model,
+                self._effective_base,
+            )
+            return await self._chat_completions(
+                model, messages, tools, max_tokens, temperature, on_progress, source
+            )
 
         except Exception as e:
-            logger.warning(f"Responses API probe failed ({e}), trying Chat Completions")
-            return await self._chat_completions(model, messages, tools, max_tokens, temperature)
+            logger.warning(
+                "[{}] Responses API probe failed for model={} base={} ({}) trying Chat Completions",
+                source,
+                model,
+                self._effective_base,
+                e,
+            )
+            return await self._chat_completions(
+                model, messages, tools, max_tokens, temperature, on_progress, source
+            )
 
     def _parse_completions_response(self, response: Any) -> LLMResponse:
         choice = response.choices[0]
