@@ -1,0 +1,61 @@
+"""Tests for AsyncioRunner."""
+
+from __future__ import annotations
+
+import asyncio
+import time
+
+import pytest
+
+from app.backend.asyncio_runner import AsyncioRunner
+
+
+@pytest.fixture
+def runner():
+    r = AsyncioRunner()
+    r.start()
+    yield r
+    r.shutdown(grace_s=3.0)
+
+
+def test_submit_and_get_result(runner):
+    async def add(a, b):
+        return a + b
+
+    fut = runner.submit(add(2, 3))
+    assert fut.result(timeout=3) == 5
+
+
+def test_submit_exception_propagates(runner):
+    async def boom():
+        raise ValueError("test error")
+
+    fut = runner.submit(boom())
+    with pytest.raises(ValueError, match="test error"):
+        fut.result(timeout=3)
+
+
+def test_shutdown_does_not_hang(runner):
+    async def slow():
+        await asyncio.sleep(0.1)
+        return "ok"
+
+    fut = runner.submit(slow())
+    runner.shutdown(grace_s=3.0)
+    # After shutdown, future should still resolve
+    assert fut.result(timeout=3) == "ok"
+
+
+def test_start_idempotent():
+    r = AsyncioRunner()
+    r.start()
+    r.start()  # second call should be no-op
+    fut = r.submit(asyncio.sleep(0))
+    fut.result(timeout=3)
+    r.shutdown()
+
+
+def test_submit_before_start_raises():
+    r = AsyncioRunner()
+    with pytest.raises(RuntimeError):
+        r.submit(asyncio.sleep(0))
