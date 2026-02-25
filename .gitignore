@@ -20,9 +20,18 @@ venv/
 .pytest_cache/
 .ruff_cache/
 
-# Docs (allow SVGs for README)
-docs/*
-!docs/*.svg
+# Docs (local engineering notes, not published)
+docs/
+
+# Runtime workspace (template is bao/templates/workspace/)
+workspace/
+
+# Skill lock (opencode artifact)
+skills-lock.json
+
+# Local dev artifacts
+hot_restart.sh
+case/
 
 # Logs
 botpy.log
