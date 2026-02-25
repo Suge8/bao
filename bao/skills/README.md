@@ -1,8 +1,6 @@
 # bao Skills
 
-This directory contains built-in skills that extend bao's capabilities.
-
-bao is a lightweight AI assistant framework with enhanced agent intelligence (Thinking Protocol, Retry/Reflection, ExperienceLoop).
+This directory contains built-in skills that ship with bao. User skills live in `~/.bao/workspace/skills/` (auto-discovered, highest priority).
 
 ## Skill Format
 
@@ -14,7 +12,7 @@ Each skill is a directory containing a `SKILL.md` file with:
 
 The skill format and metadata structure follow [OpenClaw](https://github.com/openclaw/openclaw) conventions to maintain compatibility with the ClawHub skill ecosystem.
 
-## Available Skills
+## Built-in Skills
 
 | Skill | Description |
 |-------|-------------|
@@ -26,3 +24,10 @@ The skill format and metadata structure follow [OpenClaw](https://github.com/ope
 | `cron` | Schedule reminders and recurring tasks |
 | `clawhub` | Search and install skills from ClawHub registry |
 | `skill-creator` | Create new skills |
+| `agent-browser` | Browser automation for web testing, form filling, screenshots |
+| `copywriting` | Marketing copy and content writing |
+| `docx` | Word document creation, reading, editing |
+| `find-skills` | Discover and install skills |
+| `pdf` | PDF reading, merging, splitting, OCR |
+| `pptx` | PowerPoint presentation creation and editing |
+| `xlsx` | Excel spreadsheet creation, editing, data cleaning |
