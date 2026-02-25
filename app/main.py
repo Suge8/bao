@@ -7,7 +7,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QLocale, QObject, QTimer, Slot
+from PySide6.QtCore import QLocale, QObject, QTimer, Signal, Slot, Property
 from PySide6.QtGui import QColor, QGuiApplication, QSurfaceFormat
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtQuick import QQuickWindow
@@ -15,13 +15,20 @@ from PySide6.QtQuickControls2 import QQuickStyle
 
 
 class ThemeManager(QObject):
+    isDarkChanged = Signal()
+
     def __init__(self) -> None:
         super().__init__()
         self._is_dark: bool = True
 
+    @Property(bool, notify=isDarkChanged)
+    def isDark(self) -> bool:
+        return self._is_dark
+
     @Slot()
     def toggle_theme(self) -> None:
         self._is_dark = not self._is_dark
+        self.isDarkChanged.emit()
 
 
 def parse_args() -> tuple[bool, str | None, bool, str, bool, str | None]:
@@ -82,6 +89,78 @@ def detect_system_ui_language() -> str:
     return "en"
 
 
+def _apply_windows_rounded_corners(window: QQuickWindow) -> bool:
+    if sys.platform != "win32":
+        return False
+    try:
+        import ctypes
+
+        dwmwa_window_corner_preference = 33
+        dwmwcp_round = 2
+        hwnd = int(window.winId())
+        if hwnd == 0:
+            return False
+        pref = ctypes.c_int(dwmwcp_round)
+        result = ctypes.windll.dwmapi.DwmSetWindowAttribute(
+            ctypes.c_void_p(hwnd),
+            ctypes.c_uint(dwmwa_window_corner_preference),
+            ctypes.byref(pref),
+            ctypes.sizeof(pref),
+        )
+        return result == 0
+    except Exception:
+        return False
+
+
+def _to_qcolor(value: object, fallback: QColor) -> QColor:
+    color = QColor(value)
+    if color.isValid():
+        return color
+    return fallback
+
+
+def _to_colorref(color: QColor) -> int:
+    return (color.blue() << 16) | (color.green() << 8) | color.red()
+
+
+def _apply_windows_titlebar_colors(
+    window: QQuickWindow,
+    caption_color: QColor,
+    text_color: QColor,
+    border_color: QColor,
+) -> bool:
+    if sys.platform != "win32":
+        return False
+    try:
+        import ctypes
+
+        dwmwa_border_color = 34
+        dwmwa_caption_color = 35
+        dwmwa_text_color = 36
+        hwnd = int(window.winId())
+        if hwnd == 0:
+            return False
+
+        values = (
+            (dwmwa_caption_color, _to_colorref(caption_color)),
+            (dwmwa_text_color, _to_colorref(text_color)),
+            (dwmwa_border_color, _to_colorref(border_color)),
+        )
+        ok = False
+        for attr, raw in values:
+            val = ctypes.c_uint(raw)
+            result = ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                ctypes.c_void_p(hwnd),
+                ctypes.c_uint(attr),
+                ctypes.byref(val),
+                ctypes.sizeof(val),
+            )
+            ok = ok or (result == 0)
+        return ok
+    except Exception:
+        return False
+
+
 def main() -> int:
     smoke, qml, smoke_theme_toggle, start_view, seed_messages, smoke_screenshot = parse_args()
     qml_path = resolve_qml_path(qml)
@@ -120,15 +199,23 @@ def main() -> int:
     runner = AsyncioRunner()
     runner.start()
     messages_model = ChatMessageModel()
-    chat_service = ChatService(messages_model)
+    chat_service = ChatService(messages_model, runner)
     config_service = ConfigService()
     session_service = SessionService(runner)
     theme_manager = ThemeManager()
 
     from bao.config.loader import ensure_first_run
+
     ensure_first_run()
 
     config_service.load()
+
+    # Early SessionManager for browsing history without gateway
+    from bao.session.manager import SessionManager
+
+    _ws = Path(config_service.get("agents.defaults.workspace", "~/.bao/workspace")).expanduser()
+    _ws.mkdir(parents=True, exist_ok=True)
+    session_service.initialize(SessionManager(_ws))
 
     # Wire gateway → session: when gateway is ready, initialize session service
     chat_service.gatewayReady.connect(lambda sm, _ch: session_service.initialize(sm))
@@ -149,10 +236,28 @@ def main() -> int:
         return 1
 
     root = engine.rootObjects()[0]
+    use_native_title_bar = True
+    _ = root.setProperty("useNativeTitleBar", use_native_title_bar)
     if isinstance(root, QQuickWindow):
-        root.setColor(QColor(0, 0, 0, 0))
+        if not use_native_title_bar:
+            root.setColor(QColor(0, 0, 0, 0))
+        elif sys.platform == "win32":
+            caption_color = _to_qcolor(root.property("bgBase"), QColor("#0C0C14"))
+            text_color = _to_qcolor(root.property("textPrimary"), QColor("#E8E8F0"))
+            border_color = _to_qcolor(root.property("borderSubtle"), caption_color)
+            QTimer.singleShot(
+                0,
+                lambda: (
+                    _apply_windows_rounded_corners(root),
+                    _apply_windows_titlebar_colors(root, caption_color, text_color, border_color),
+                ),
+            )
     _ = root.setProperty("startView", start_view)
 
+    # Auto-start gateway when config is valid (skip in smoke modes)
+    _is_smoke = smoke or smoke_screenshot or smoke_theme_toggle
+    if not _is_smoke and config_service.isValid and not config_service.needsSetup:
+        QTimer.singleShot(0, chat_service.start)
     if seed_messages:
         messages_model.append_user("Hello, what can you do?")
         messages_model.append_assistant(
