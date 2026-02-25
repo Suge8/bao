@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from inspect import isawaitable
 from typing import Any
 
 
@@ -140,32 +141,74 @@ def build_gateway_stack(config: Any, provider: Any) -> GatewayStack:
     )
 
 
-async def send_startup_greeting(agent: Any, bus: Any, config: Any) -> None:
+async def send_startup_greeting(
+    agent: Any,
+    bus: Any,
+    config: Any,
+    *,
+    on_desktop_greeting: Any | None = None,
+) -> None:
     """Send startup greeting to all enabled channels.
-
-    Waits 5 seconds after boot, then sends an onboarding prompt or
-    a persona-based greeting to every allowed contact.
+    Each channel gets an independent LLM call with its own session context.
+    Channels where allow_from != chat_id are skipped (discord/slack/mochat).
     """
     from loguru import logger
 
     from bao.bus.events import OutboundMessage
 
+    async def _emit_desktop_greeting(content: str, phase: str) -> None:
+        if not on_desktop_greeting:
+            return
+        try:
+            maybe = on_desktop_greeting(content)
+            if isawaitable(maybe):
+                await maybe
+        except Exception as e:
+            logger.warning("{} desktop greeting callback failed: {}", phase, e)
+
     await asyncio.sleep(5)
 
+    def _extract_primary_id(raw_uid: Any) -> str:
+        return str(raw_uid or "").split("|", 1)[0].strip()
+
+    targets: list[tuple[str, str]] = []
+    seen_targets: set[tuple[str, str]] = set()
+
+    def _add_target(channel_name: str, chat_id: str) -> None:
+        if not chat_id:
+            logger.warning("Skip startup greeting target for {} due to empty chat_id", channel_name)
+            return
+        pair = (channel_name, chat_id)
+        if pair in seen_targets:
+            return
+        seen_targets.add(pair)
+        targets.append(pair)
+
+    # Channels where allow_from directly maps to chat_id
     channel_cfgs = [
         ("telegram", config.channels.telegram),
-        ("imessage", config.channels.imessage),
-        ("whatsapp", config.channels.whatsapp),
+        ("feishu", config.channels.feishu),
         ("dingtalk", config.channels.dingtalk),
+        ("imessage", config.channels.imessage),
+        ("qq", config.channels.qq),
+        ("email", config.channels.email),
     ]
-    targets = [
-        (name, uid.split("|")[0])
-        for name, cfg in channel_cfgs
-        if cfg.enabled and cfg.allow_from
-        for uid in cfg.allow_from
-    ]
-    if not targets:
-        return
+    for name, cfg in channel_cfgs:
+        if not (cfg.enabled and cfg.allow_from):
+            continue
+        for uid in cfg.allow_from:
+            _add_target(name, _extract_primary_id(uid))
+
+    # WhatsApp: phone -> JID (skip if already a JID)
+    wa = config.channels.whatsapp
+    if wa.enabled and wa.allow_from:
+        for uid in wa.allow_from:
+            bare = _extract_primary_id(uid)
+            if not bare:
+                logger.warning("Skip startup greeting target for whatsapp due to empty id")
+                continue
+            jid = bare if "@" in bare else f"{bare}@s.whatsapp.net"
+            _add_target("whatsapp", jid)
 
     from bao.config.loader import (
         LANG_PICKER,
@@ -175,32 +218,88 @@ async def send_startup_greeting(agent: Any, bus: Any, config: Any) -> None:
     )
 
     stage = detect_onboarding_stage(config.workspace_path)
-    if stage == "lang_select":
+
+    # Onboarding: broadcast static messages (no session needed)
+    if stage in ("lang_select", "persona_setup"):
+        if stage == "lang_select":
+            content = LANG_PICKER
+        else:
+            lang = infer_language(config.workspace_path)
+            content = PERSONA_GREETING.get(lang, PERSONA_GREETING["en"])
         for ch, cid in targets:
-            await bus.publish_outbound(
-                OutboundMessage(channel=ch, chat_id=cid, content=LANG_PICKER)
-            )
-        return
-    if stage == "persona_setup":
-        greeting = PERSONA_GREETING[infer_language(config.workspace_path)]
-        for ch, cid in targets:
-            await bus.publish_outbound(OutboundMessage(channel=ch, chat_id=cid, content=greeting))
+            try:
+                await bus.publish_outbound(
+                    OutboundMessage(channel=ch, chat_id=cid, content=content)
+                )
+            except Exception as e:
+                logger.warning("Onboarding to {}:{} failed: {}", ch, cid, e)
+        await _emit_desktop_greeting(content, "Onboarding")
         return
 
+    # Ready stage: personalized greeting per channel
     prompt = (
         "You just came online. Greet the user in character based on your "
         "PERSONA.md personality. Mention the current time naturally. "
         "Don't self-introduce. Keep it short, like an old friend saying hi."
     )
-    try:
-        greeting = await agent.process_direct(prompt, session_key="system:greeting")
-    except Exception as e:
-        logger.warning("Startup greeting failed: {}", e)
-        return
 
-    if greeting:
-        for ch, cid in targets:
-            await bus.publish_outbound(OutboundMessage(channel=ch, chat_id=cid, content=greeting))
+    async def _generate_and_clean(session_key: str, channel: str, chat_id: str) -> str | None:
+        """Generate greeting and remove the prompt from session history."""
+        active = agent.sessions.get_active_session_key(session_key)
+        resolved = active or session_key
+        session = agent.sessions.get_or_create(resolved)
+        n_before = len(session.messages)
+        try:
+            text = await agent.process_direct(
+                prompt,
+                session_key=resolved,
+                channel=channel,
+                chat_id=chat_id,
+            )
+        except Exception as e:
+            logger.warning("Startup greeting to {}:{} failed: {}", channel, chat_id, e)
+            return None
+        if not text:
+            return None
+        # Remove only the injected prompt message, keep everything else
+        try:
+            session = agent.sessions.get_or_create(resolved)
+            for i in range(n_before, len(session.messages)):
+                msg = session.messages[i]
+                content = msg.get("content", "")
+                if msg.get("role") != "user":
+                    continue
+                if content == prompt:
+                    removed = session.messages.pop(i)
+                    try:
+                        agent.sessions.save(session)
+                    except Exception as e:
+                        session.messages.insert(i, removed)
+                        logger.warning(
+                            "Startup prompt cleanup persist failed for {}:{}: {}",
+                            channel,
+                            chat_id,
+                            e,
+                        )
+                    break
+        except Exception as e:
+            logger.warning("Startup prompt cleanup failed for {}:{}: {}", channel, chat_id, e)
+        return text
+
+    # External channels
+    for ch, cid in targets:
+        text = await _generate_and_clean(f"{ch}:{cid}", ch, cid)
+        if text:
+            try:
+                await bus.publish_outbound(OutboundMessage(channel=ch, chat_id=cid, content=text))
+            except Exception as e:
+                logger.warning("Send greeting to {}:{} failed: {}", ch, cid, e)
+
+    # Desktop channel (not in ChannelManager, uses callback)
+    if on_desktop_greeting:
+        text = await _generate_and_clean("desktop:local", "desktop", "local")
+        if text:
+            await _emit_desktop_greeting(text, "Desktop startup")
 
 
 async def shutdown_gateway_stack(stack: GatewayStack, background_tasks: list[Any]) -> None:
