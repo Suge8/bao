@@ -31,3 +31,7 @@ The skill format and metadata structure follow [OpenClaw](https://github.com/ope
 | `pdf` | PDF reading, merging, splitting, OCR |
 | `pptx` | PowerPoint presentation creation and editing |
 | `xlsx` | Excel spreadsheet creation, editing, data cleaning |
+| `opencode` | Production-ready coding copilot flow for OpenCode (plan, implement, verify, iterate) |
+| `codex` | Production-ready coding copilot flow for Codex CLI (execute, continue, inspect details) |
+
+Note: Claude Code is currently provided as built-in tools (`claudecode`, `claudecode_details`) in `bao/agent/tools`, not as a standalone skill directory.
