@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 from google import genai
 from google.genai import types
@@ -129,6 +129,7 @@ class GeminiProvider(LLMProvider):
         model: str | None = None,
         max_tokens: int = 4096,
         temperature: float = 0.7,
+        on_progress: Callable[[str], Awaitable[None]] | None = None,
         **kwargs: Any,
     ) -> LLMResponse:
         """
@@ -180,12 +181,61 @@ class GeminiProvider(LLMProvider):
             )
 
         try:
-            response = await self._client.aio.models.generate_content(
+            content = ""
+            tool_calls: list[ToolCallRequest] = []
+            reasoning_content: str | None = None
+            chunk = None
+            async for chunk in await self._client.aio.models.generate_content_stream(
                 model=resolved_model,
                 contents=contents,
                 config=config,
+            ):
+                if not chunk.candidates:
+                    continue
+                candidate = chunk.candidates[0]
+                if not candidate.content or not candidate.content.parts:
+                    continue
+                for part in candidate.content.parts:
+                    if part.text:
+                        content += part.text
+                        if on_progress:
+                            await on_progress(part.text)
+                    if getattr(part, "thought", None):
+                        reasoning_content = (reasoning_content or "") + str(part.thought)
+                    if part.function_call:
+                        fc = part.function_call
+                        args_dict = {}
+                        if fc.args:
+                            args_dict = dict(fc.args) if isinstance(fc.args, dict) else {}
+                        tool_calls.append(ToolCallRequest(
+                            id=getattr(fc, "id", None) or f"call_{fc.name}",
+                            name=fc.name or "unknown",
+                            arguments=args_dict,
+                        ))
+            # Finish reason from last chunk
+            finish_reason = "stop"
+            if chunk and chunk.candidates:
+                fr = str(chunk.candidates[0].finish_reason)
+                finish_reason = {
+                    "STOP": "stop", "MAX_TOKENS": "length",
+                    "SAFETY": "content_filter", "RECITATION": "content_filter",
+                }.get(fr, "stop")
+            # Usage from last chunk
+            usage: dict[str, int] = {}
+            if chunk and hasattr(chunk, "usage_metadata") and chunk.usage_metadata:
+                um = chunk.usage_metadata
+                usage = {
+                    "prompt_tokens": getattr(um, "prompt_token_count", 0),
+                    "completion_tokens": getattr(um, "candidates_token_count", 0),
+                    "total_tokens": getattr(um, "total_token_count", 0),
+                }
+            return LLMResponse(
+                content=content or None,
+                tool_calls=tool_calls,
+                finish_reason=finish_reason,
+                usage=usage,
+                reasoning_content=reasoning_content,
             )
-            return self._parse_response(response)
         except Exception as e:
             return LLMResponse(
                 content=f"Error calling Gemini: {str(e)}",

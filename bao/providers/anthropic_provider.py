@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 import anthropic
+import json
 
 from bao.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 
@@ -255,6 +256,7 @@ class AnthropicProvider(LLMProvider):
         model: str | None = None,
         max_tokens: int = 4096,
         temperature: float = 0.7,
+        on_progress: Callable[[str], Awaitable[None]] | None = None,
         **kwargs: Any,
     ) -> LLMResponse:
         """
@@ -304,8 +306,72 @@ class AnthropicProvider(LLMProvider):
             request_kwargs["thinking"] = thinking
 
         try:
-            response = await self._client.messages.create(**request_kwargs)
-            return self._parse_response(response)
+            content = ""
+            tool_calls: list[ToolCallRequest] = []
+            reasoning_content: str | None = None
+            current_tool_id: str | None = None
+            current_tool_name: str | None = None
+            partial_json = ""
+
+            async with self._client.messages.stream(**request_kwargs) as stream:
+                async for event in stream:
+                    if event.type == "content_block_start":
+                        if hasattr(event.content_block, "type"):
+                            if event.content_block.type == "tool_use":
+                                current_tool_id = event.content_block.id
+                                current_tool_name = event.content_block.name
+                                partial_json = ""
+                    elif event.type == "content_block_delta":
+                        delta = event.delta
+                        if delta.type == "text_delta":
+                            content += delta.text
+                            if on_progress:
+                                await on_progress(delta.text)
+                        elif delta.type == "input_json_delta":
+                            partial_json += delta.partial_json
+                        elif delta.type == "thinking_delta":
+                            if reasoning_content is None:
+                                reasoning_content = ""
+                            reasoning_content += delta.thinking
+                    elif event.type == "content_block_stop":
+                        if current_tool_id and current_tool_name:
+                            args = json.loads(partial_json) if partial_json else {}
+                            tool_calls.append(ToolCallRequest(
+                                id=current_tool_id,
+                                name=current_tool_name,
+                                arguments=args,
+                            ))
+                            current_tool_id = None
+                            current_tool_name = None
+                            partial_json = ""
+
+                final_msg = await stream.get_final_message()
+
+            # Usage from final message
+            usage = {
+                "prompt_tokens": final_msg.usage.input_tokens,
+                "completion_tokens": final_msg.usage.output_tokens,
+                "total_tokens": final_msg.usage.input_tokens + final_msg.usage.output_tokens,
+            }
+
+            # Map finish reason
+            stop = final_msg.stop_reason
+            if stop == "end_turn":
+                finish_reason = "stop"
+            elif stop == "max_tokens":
+                finish_reason = "length"
+            elif stop == "tool_use":
+                finish_reason = "tool_calls"
+            else:
+                finish_reason = stop or "stop"
+
+            return LLMResponse(
+                content=content or None,
+                tool_calls=tool_calls,
+                finish_reason=finish_reason,
+                usage=usage,
+                reasoning_content=reasoning_content,
+            )
         except Exception as e:
             return LLMResponse(
                 content=f"Error calling Anthropic: {str(e)}",

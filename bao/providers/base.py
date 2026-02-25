@@ -2,7 +2,7 @@
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 import json_repair
 
@@ -88,6 +88,8 @@ class LLMProvider(ABC):
         model: str | None = None,
         max_tokens: int = 4096,
         temperature: float = 0.1,
+        on_progress: Callable[[str], Awaitable[None]] | None = None,
+        **kwargs: Any,
     ) -> LLMResponse:
         pass
 
