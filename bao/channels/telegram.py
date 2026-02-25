@@ -115,6 +115,7 @@ class TelegramChannel(BaseChannel):
         BotCommand("new", "Start a new conversation"),
         BotCommand("session", "Switch conversation"),
         BotCommand("delete", "Delete current conversation"),
+        BotCommand("stop", "Stop the current task"),
         BotCommand("help", "Show available commands"),
     ]
 
@@ -156,6 +157,7 @@ class TelegramChannel(BaseChannel):
         self._app.add_handler(CommandHandler("new", self._forward_command))
         self._app.add_handler(CommandHandler("session", self._forward_command))
         self._app.add_handler(CommandHandler("delete", self._forward_command))
+        self._app.add_handler(CommandHandler("stop", self._forward_command))
         self._app.add_handler(CommandHandler("help", self._on_help))
 
         # Add message handler for text, photos, voice, documents
@@ -311,6 +313,7 @@ class TelegramChannel(BaseChannel):
         await update.message.reply_text(
             "🐈 bao commands:\n"
             "/new — Start a new conversation\n"
+            "/stop — Stop the current task\n"
             "/session — Switch between conversations\n"
             "/delete — Delete current conversation\n"
             "/model — Switch model\n"
