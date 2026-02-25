@@ -26,11 +26,24 @@ Rectangle {
         }
         spacing: 8
 
-        Text {
-            text: "💬"
-            font.pixelSize: 12
+        Rectangle {
+            id: leadingIcon
+            width: 20
+            height: 20
+            radius: 10
+            color: root.isActive ? accentMuted : (isDark ? "#10FFFFFF" : "#12000000")
+            border.width: 1
+            border.color: root.isActive ? accentGlow : borderSubtle
             anchors.verticalCenter: parent.verticalCenter
-            opacity: root.isActive ? 1.0 : 0.5
+
+            Image {
+                anchors.centerIn: parent
+                source: "../resources/icons/chat.svg"
+                sourceSize: Qt.size(12, 12)
+                width: 12
+                height: 12
+                opacity: root.isActive ? 1.0 : 0.85
+            }
         }
 
         Text {
@@ -39,7 +52,7 @@ Rectangle {
             font.pixelSize: 13
             font.weight: root.isActive ? Font.Medium : Font.Normal
             elide: Text.ElideRight
-            width: parent.width - 28
+            width: Math.max(0, parent.width - leadingIcon.width - 12)
             anchors.verticalCenter: parent.verticalCenter
 
             Behavior on color { ColorAnimation { duration: 150 } }

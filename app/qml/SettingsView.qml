@@ -402,11 +402,14 @@ Rectangle {
         var changes = {}
         collectFields(innerCol, changes)
         var pName = changes["_providerName"]
+        // Use original provider key to avoid creating orphan entries on rename
+        var originalProvider = configService.getFirstProvider()
+        var saveKey = (originalProvider && originalProvider.name) ? originalProvider.name : pName
         var providerFields = ["_providerType", "_providerApiKey", "_providerApiBase", "_providerApiMode"]
         var realKeys = ["type", "apiKey", "apiBase", "apiMode"]
         for (var i = 0; i < providerFields.length; i++) {
             var val = changes[providerFields[i]]
-            if (pName && val) changes["providers." + pName + "." + realKeys[i]] = val
+            if (saveKey && val) changes["providers." + saveKey + "." + realKeys[i]] = val
             delete changes[providerFields[i]]
         }
         delete changes["_providerName"]

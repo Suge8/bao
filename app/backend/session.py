@@ -21,6 +21,7 @@ class SessionListModel(QAbstractListModel):
         Qt.UserRole + 2: b"title",
         Qt.UserRole + 3: b"isActive",
         Qt.UserRole + 4: b"updatedAt",
+        Qt.UserRole + 5: b"channel",
     }
 
     def __init__(self, parent: Any = None) -> None:
@@ -43,6 +44,8 @@ class SessionListModel(QAbstractListModel):
             return s.get("key", "") == self._active_key
         if role == Qt.UserRole + 4:
             return s.get("updated_at", 0)
+        if role == Qt.UserRole + 5:
+            return s.get("channel", "other")
         return None
 
     def roleNames(self) -> dict[int, bytes]:
@@ -136,11 +139,14 @@ class SessionService(QObject):
         active = sm.get_active_session_key(self._natural_key) or ""
         result = []
         for s in sessions:
+            key = s["key"]
+            channel = key.split(":")[0] if ":" in key else "other"
             result.append(
                 {
-                    "key": s["key"],
-                    "title": s.get("metadata", {}).get("title") or s["key"],
+                    "key": key,
+                    "title": s.get("metadata", {}).get("title") or key,
                     "updated_at": s.get("updated_at", 0),
+                    "channel": channel,
                 }
             )
         return result, active
@@ -199,9 +205,18 @@ class SessionService(QObject):
             self.errorOccurred.emit(error)
             return
         sessions, active = data
+        # Auto-select first desktop session when no active key
+        if not active and sessions:
+            desktop = [s for s in sessions if s.get("channel") == "desktop"]
+            pick = desktop[0] if desktop else sessions[0]
+            active = pick["key"]
+            if self._session_manager:
+                self._session_manager.set_active_session_key(self._natural_key, active)
         self._active_key = active
         self._model.reset_sessions(sessions, active)
         self.sessionsChanged.emit()
+        if active:
+            self.activeKeyChanged.emit(active)
 
     def _handle_select_result(self, ok: bool, error: str, key: str) -> None:
         if not ok:

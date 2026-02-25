@@ -4,7 +4,7 @@ import QtQuick.Controls 2.15
 Rectangle {
     id: root
 
-    property string icon: ""
+    property string iconSource: ""
     property string label: ""
     property bool active: false
     signal clicked()
@@ -21,9 +21,10 @@ Rectangle {
         anchors { verticalCenter: parent.verticalCenter; left: parent.left; leftMargin: 14 }
         spacing: 10
 
-        Text {
-            text: root.icon
-            font.pixelSize: 15
+        Image {
+            source: root.iconSource
+            sourceSize: Qt.size(16, 16)
+            width: 16; height: 16
             anchors.verticalCenter: parent.verticalCenter
         }
 

@@ -34,22 +34,22 @@ class ChatService(QObject):
     _sendResult = Signal(int, bool, str)  # row, ok, content_or_error
     _historyResult = Signal(bool, str, object)  # ok, error, messages_list
 
-    def __init__(self, model: ChatMessageModel, parent: Any = None) -> None:
+    def __init__(self, model: ChatMessageModel, runner: AsyncioRunner, parent: Any = None) -> None:
         super().__init__(parent)
         self._model = model
-        self._runner = AsyncioRunner()
+        self._runner = runner
         self._state = "idle"
         self._last_error = ""
         self._agent: Any = None
         self._channels: Any = None
         self._cron: Any = None
         self._heartbeat: Any = None
-        self._background_tasks: list[asyncio.Task] = []
+        self._background_tasks: list[asyncio.Task[Any]] = []
         self._session_key = "desktop:local"
         self._send_queue: queue.Queue[str] = queue.Queue()
         self._processing = False
         self._lock = threading.Lock()
-        self._cron_status: dict = {}
+        self._cron_status: dict[str, Any] = {}
         self._session_manager: Any = None
 
         self._initResult.connect(self._handle_init_result)
@@ -120,7 +120,7 @@ class ChatService(QObject):
         fut = self._runner.submit(self._load_history(key))
         fut.add_done_callback(self._on_history_done)
 
-    async def _load_history(self, key: str) -> list[dict]:
+    async def _load_history(self, key: str) -> list[dict[str, Any]]:
         """Load session message history from SessionManager (runs on asyncio thread)."""
         session = self._session_manager.get_or_create(key)
         return session.get_history()
@@ -138,6 +138,7 @@ class ChatService(QObject):
         if not ok:
             return
         self._model.load_history(messages or [])
+
     # ------------------------------------------------------------------
     # Internal: full gateway init (mirrors CLI run_gateway)
     # ------------------------------------------------------------------
@@ -190,7 +191,7 @@ class ChatService(QObject):
             self._initResult.emit(True, "", sm, ch_list)
 
     def _handle_init_result(
-        self, ok: bool, error_msg: str, session_manager: Any, channels: list
+        self, ok: bool, error_msg: str, session_manager: Any, channels: list[str]
     ) -> None:
         """Runs on Qt main thread."""
         if not ok:
@@ -318,4 +319,3 @@ class ChatService(QObject):
             self._agent.stop()
         if self._channels:
             await self._channels.stop_all()
-

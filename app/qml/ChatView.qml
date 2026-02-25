@@ -6,6 +6,9 @@ Rectangle {
     id: root
     color: "transparent"
 
+    // Signal to request switching to settings page
+    signal openSettings()
+
     ColumnLayout {
         anchors.fill: parent
         spacing: 0
@@ -36,116 +39,235 @@ Rectangle {
                 status: model.status ?? "done"
             }
 
-            // Empty state
-            Column {
+            // ── Empty state — multi-state onboarding cards ──────────
+            Item {
                 anchors.centerIn: parent
+                width: Math.min(360, messageList.width - 80)
+                height: emptyCol.implicitHeight
                 visible: messageList.count === 0
-                spacing: 16
 
-                Text {
+                Column {
+                    id: emptyCol
                     anchors.horizontalCenter: parent.horizontalCenter
-                    text: "🤖"
-                    font.pixelSize: 48
-                    opacity: 0.6
-                }
-                Text {
-                    anchors.horizontalCenter: parent.horizontalCenter
-                    text: strings.chat_empty_title
-                    color: textSecondary
-                    font.pixelSize: 18
-                    font.weight: Font.Medium
-                }
-                Text {
-                    anchors.horizontalCenter: parent.horizontalCenter
-                    text: {
-                        if (chatService && chatService.state !== "running") {
-                            switch (chatService.state) {
-                                case "starting": return strings.gateway_starting
-                                case "error":    return chatService.lastError || strings.gateway_error
-                                default:         return strings.gateway_idle
+                    width: parent.width
+                    spacing: 16
+
+                    // ── State 1: Needs setup (no config) ──
+                    Column {
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        visible: configService && configService.needsSetup
+                        spacing: 14
+                        width: parent.width
+
+                        Rectangle {
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            width: 72; height: 72; radius: 36
+                            color: isDark ? "#10FFFFFF" : "#08000000"
+                            Image {
+                                anchors.centerIn: parent
+                                source: "../resources/icons/settings.svg"
+                                sourceSize: Qt.size(32, 32)
+                                width: 32; height: 32
+                                opacity: 0.6
                             }
                         }
-                        return strings.chat_empty_hint
+                        Text {
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            text: strings.empty_setup_title
+                            color: textPrimary
+                            font.pixelSize: 20
+                            font.weight: Font.DemiBold
+                            font.letterSpacing: 0.3
+                        }
+                        Text {
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            text: strings.empty_setup_hint
+                            color: textTertiary
+                            font.pixelSize: 14
+                            horizontalAlignment: Text.AlignHCenter
+                            width: parent.width
+                            wrapMode: Text.WordWrap
+                        }
+                        Rectangle {
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            width: 140; height: 40; radius: radiusMd
+                            color: setupBtnHover.containsMouse ? accentHover : accent
+                            Behavior on color { ColorAnimation { duration: 150 } }
+                            Text {
+                                anchors.centerIn: parent
+                                text: strings.empty_setup_btn
+                                color: "#FFFFFF"
+                                font.pixelSize: 14
+                                font.weight: Font.DemiBold
+                            }
+                            MouseArea {
+                                id: setupBtnHover
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: root.openSettings()
+                            }
+                        }
                     }
-                    color: textTertiary
-                    font.pixelSize: 13
+
+                    // ── State 2: Gateway starting ──
+                    Column {
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        visible: chatService && chatService.state === "starting"
+                                 && !(configService && configService.needsSetup)
+                        spacing: 14
+
+                        BusyIndicator {
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            width: 48; height: 48
+                            running: visible
+                            palette.dark: accent
+                        }
+                        Text {
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            text: strings.empty_starting_hint
+                            color: textTertiary
+                            font.pixelSize: 15
+                            font.weight: Font.Medium
+                        }
+                    }
+
+                    // ── State 3: Gateway error ──
+                    Column {
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        visible: chatService && chatService.state === "error"
+                                 && !(configService && configService.needsSetup)
+                        spacing: 14
+                        width: parent.width
+
+                        Rectangle {
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            width: 72; height: 72; radius: 36
+                            color: isDark ? "#18F87171" : "#10F87171"
+                            Text {
+                                anchors.centerIn: parent
+                                text: "!"
+                                color: statusError
+                                font.pixelSize: 28
+                                font.weight: Font.Bold
+                            }
+                        }
+                        Text {
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            text: strings.empty_error_hint
+                            color: textPrimary
+                            font.pixelSize: 18
+                            font.weight: Font.DemiBold
+                        }
+                        Text {
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            text: chatService ? (chatService.lastError || "") : ""
+                            color: textTertiary
+                            font.pixelSize: 13
+                            horizontalAlignment: Text.AlignHCenter
+                            width: parent.width
+                            wrapMode: Text.WordWrap
+                            visible: text !== ""
+                        }
+                        Rectangle {
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            width: 120; height: 38; radius: radiusMd
+                            color: retryBtnHover.containsMouse ? accentHover : accent
+                            Behavior on color { ColorAnimation { duration: 150 } }
+                            Text {
+                                anchors.centerIn: parent
+                                text: strings.empty_error_btn
+                                color: "#FFFFFF"
+                                font.pixelSize: 14
+                                font.weight: Font.DemiBold
+                            }
+                            MouseArea {
+                                id: retryBtnHover
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: if (chatService) chatService.start()
+                            }
+                        }
+                    }
+
+                    // ── State 4: Ready (running, no messages yet) ──
+                    Column {
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        visible: chatService && chatService.state === "running"
+                        spacing: 14
+
+                        Rectangle {
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            width: 72; height: 72; radius: 36
+                            color: isDark ? "#10FFFFFF" : "#08000000"
+                            Image {
+                                anchors.centerIn: parent
+                                source: "../resources/icons/chat.svg"
+                                sourceSize: Qt.size(32, 32)
+                                width: 32; height: 32
+                                opacity: 0.6
+                            }
+                        }
+                        Text {
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            text: strings.empty_chat_title
+                            color: textPrimary
+                            font.pixelSize: 20
+                            font.weight: Font.DemiBold
+                            font.letterSpacing: 0.3
+                        }
+                        Text {
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            text: strings.empty_chat_hint
+                            color: textTertiary
+                            font.pixelSize: 14
+                        }
+                    }
+                    // ── State 5: Idle/Stopped (gateway not started) ──
+                    Column {
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        visible: {
+                            if (!chatService) return true
+                            var s = chatService.state
+                            return (s === "idle" || s === "stopped")
+                                   && !(configService && configService.needsSetup)
+                        }
+                        spacing: 14
+                        Rectangle {
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            width: 72; height: 72; radius: 36
+                            color: isDark ? "#10FFFFFF" : "#08000000"
+                            Image {
+                                anchors.centerIn: parent
+                                source: "../resources/icons/zap.svg"
+                                sourceSize: Qt.size(32, 32)
+                                width: 32; height: 32
+                                opacity: 0.5
+                            }
+                        }
+                        Text {
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            text: strings.empty_chat_title
+                            color: textPrimary
+                            font.pixelSize: 20
+                            font.weight: Font.DemiBold
+                            font.letterSpacing: 0.3
+                        }
+                        Text {
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            text: strings.empty_chat_hint
+                            color: textTertiary
+                            font.pixelSize: 14
+                    }
                 }
             }
         }
 
-        // ── Gateway status bar ──────────────────────────────────────────
-        Rectangle {
-            Layout.fillWidth: true
-            height: 48
-            visible: !chatService || chatService.state !== "running"
-            color: bgSidebar
-
-            Row {
-                anchors.centerIn: parent
-                spacing: 14
-
-                Rectangle {
-                    width: 8; height: 8; radius: 4
-                    anchors.verticalCenter: parent.verticalCenter
-                    color: {
-                        if (!chatService) return textTertiary
-                        switch (chatService.state) {
-                            case "running":  return statusSuccess
-                            case "starting": return statusWarning
-                            case "error":    return statusError
-                            default:         return textTertiary
-                        }
-                    }
-                }
-
-                Text {
-                    anchors.verticalCenter: parent.verticalCenter
-                    text: {
-                        if (!chatService) return strings.gateway_idle
-                        switch (chatService.state) {
-                            case "starting": return strings.gateway_starting
-                            case "error":    return chatService.lastError || strings.gateway_error
-                            default:         return strings.gateway_idle
-                        }
-                    }
-                    color: textSecondary
-                    font.pixelSize: 13
-                }
-                Rectangle {
-                    width: gwBtnText.implicitWidth + 28
-                    height: 34; radius: radiusSm
-                    visible: !chatService || chatService.state !== "starting"
-                    color: gwBtnHover.containsMouse ? accentHover : accent
-                    Behavior on color { ColorAnimation { duration: 150 } }
-                    Text {
-                        id: gwBtnText
-                        anchors.centerIn: parent
-                        text: chatService && chatService.state === "running"
-                              ? strings.button_restart : strings.button_start_gateway
-                        color: "#FFFFFF"
-                        font.pixelSize: 13
-                        font.weight: Font.Medium
-                    }
-                    MouseArea {
-                        id: gwBtnHover
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: {
-                            if (chatService) {
-                                if (chatService.state === "running")
-                                    chatService.restart()
-                                else
-                                    chatService.start()
-                            }
-                        }
-                    }
-                }
-            }
-        }
         // ── Input bar ────────────────────────────────────────────────────
         Rectangle {
             Layout.fillWidth: true
+            visible: chatService && chatService.state === "running"
             height: inputRow.implicitHeight + 24
             color: bgSidebar
             radius: 20
@@ -156,6 +278,7 @@ Rectangle {
                 height: parent.radius
                 color: parent.color
             }
+
             RowLayout {
                 id: inputRow
                 anchors {
@@ -164,6 +287,7 @@ Rectangle {
                     leftMargin: 20; rightMargin: 16
                 }
                 spacing: 10
+
                 Rectangle {
                     Layout.fillWidth: true
                     height: Math.min(messageInput.implicitHeight + 20, 140)
@@ -172,6 +296,7 @@ Rectangle {
                     border.color: messageInput.activeFocus ? borderFocus : borderSubtle
                     border.width: messageInput.activeFocus ? 1.5 : 1
                     Behavior on border.color { ColorAnimation { duration: 150 } }
+
                     ScrollView {
                         anchors { fill: parent; margins: 10 }
                         ScrollBar.vertical.policy: ScrollBar.AsNeeded
@@ -194,16 +319,17 @@ Rectangle {
                         }
                     }
                 }
-                // Send button
+
                 Rectangle {
                     width: 40; height: 40; radius: radiusMd
-                    color: sendHover.containsMouse && canSend
-                           ? accentHover
-                           : (canSend ? accent : (isDark ? "#1A1A26" : "#E5E7EB"))
                     property bool canSend: messageInput.text.trim().length > 0
                                           && chatService
                                           && chatService.state === "running"
+                    color: sendHover.containsMouse && canSend
+                           ? accentHover
+                           : (canSend ? accent : (isDark ? "#1A1A26" : "#E5E7EB"))
                     Behavior on color { ColorAnimation { duration: 150 } }
+
                     Text {
                         anchors.centerIn: parent
                         text: "↑"
@@ -211,6 +337,7 @@ Rectangle {
                         font.pixelSize: 20
                         font.weight: Font.Bold
                     }
+
                     MouseArea {
                         id: sendHover
                         anchors.fill: parent
@@ -222,10 +349,13 @@ Rectangle {
             }
         }
     }
+
+
     function sendMessage() {
         var text = messageInput.text.trim()
         if (!text || !chatService) return
         chatService.sendMessage(text)
         messageInput.text = ""
     }
+}
 }

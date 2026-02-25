@@ -135,3 +135,6 @@ class ChatMessageModel(QAbstractListModel):
                 self._append({"role": "system", "content": content, "format": "plain", "status": "done"})
             elif role == "user":
                 self._append({"role": "user", "content": content, "format": "plain", "status": "done"})
+            elif role in ("tool", "tool_calls"):
+                label = "\U0001f527 " + (content if isinstance(content, str) else str(content))
+                self._append({"role": "system", "content": label, "format": "plain", "status": "done"})
