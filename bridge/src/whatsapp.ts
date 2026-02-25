@@ -9,6 +9,7 @@ import makeWASocket, {
   useMultiFileAuthState,
   fetchLatestBaileysVersion,
   makeCacheableSignalKeyStore,
+  downloadMediaMessage,
 } from '@whiskeysockets/baileys';
 
 import { Boom } from '@hapi/boom';
@@ -24,6 +25,7 @@ export interface InboundMessage {
   content: string;
   timestamp: number;
   isGroup: boolean;
+  media?: { data: string; mimetype: string; filename?: string };
 }
 
 export interface WhatsAppClientOptions {
@@ -112,15 +114,13 @@ export class WhatsAppClient {
       for (const msg of messages) {
         // Skip own messages
         if (msg.key.fromMe) continue;
-
         // Skip status updates
         if (msg.key.remoteJid === 'status@broadcast') continue;
-
         const content = this.extractMessageContent(msg);
         if (!content) continue;
-
         const isGroup = msg.key.remoteJid?.endsWith('@g.us') || false;
-
+        // Try to download media if present
+        const media = await this.downloadMedia(msg);
         this.options.onMessage({
           id: msg.key.id || '',
           sender: msg.key.remoteJid || '',
@@ -128,6 +128,7 @@ export class WhatsAppClient {
           content,
           timestamp: msg.messageTimestamp as number,
           isGroup,
+          ...(media && { media }),
         });
       }
     });
@@ -147,27 +148,45 @@ export class WhatsAppClient {
       return message.extendedTextMessage.text;
     }
 
-    // Image with caption
-    if (message.imageMessage?.caption) {
-      return `[Image] ${message.imageMessage.caption}`;
+    // Image (with or without caption)
+    if (message.imageMessage) {
+      return message.imageMessage.caption || '[Image]';
     }
 
-    // Video with caption
-    if (message.videoMessage?.caption) {
-      return `[Video] ${message.videoMessage.caption}`;
+    // Video (with or without caption)
+    if (message.videoMessage) {
+      return message.videoMessage.caption || '[Video]';
     }
 
-    // Document with caption
-    if (message.documentMessage?.caption) {
-      return `[Document] ${message.documentMessage.caption}`;
+    // Document (with or without caption)
+    if (message.documentMessage) {
+      const name = message.documentMessage.fileName || 'file';
+      return message.documentMessage.caption || `[Document: ${name}]`;
     }
 
     // Voice/Audio message
     if (message.audioMessage) {
-      return `[Voice Message]`;
+      return '[Voice Message]';
     }
 
     return null;
+  }
+
+  private async downloadMedia(msg: any): Promise<{ data: string; mimetype: string; filename?: string } | null> {
+    const message = msg.message;
+    if (!message) return null;
+    const mediaMsg = message.imageMessage || message.videoMessage
+      || message.documentMessage || message.audioMessage;
+    if (!mediaMsg) return null;
+    try {
+      const buffer = await downloadMediaMessage(msg, 'buffer', {});
+      const mimetype = mediaMsg.mimetype || 'application/octet-stream';
+      const filename = mediaMsg.fileName || undefined;
+      return { data: (buffer as Buffer).toString('base64'), mimetype, filename };
+    } catch (err) {
+      console.error('Failed to download media:', err);
+      return null;
+    }
   }
 
   async sendMessage(to: string, text: string): Promise<void> {
