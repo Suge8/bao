@@ -322,6 +322,9 @@ class FeishuChannel(BaseChannel):
                 self._ws_client.stop()
             except Exception as e:
                 logger.warning("Error stopping WebSocket client: {}", e)
+        if self._ws_thread and self._ws_thread.is_alive():
+            self._ws_thread.join(timeout=3)
+        self._ws_thread = None
         logger.info("Feishu bot stopped")
 
     def _add_reaction_sync(self, message_id: str, emoji_type: str) -> None:
@@ -698,7 +701,10 @@ class FeishuChannel(BaseChannel):
         Schedules async handling in the main event loop.
         """
         if self._loop and self._loop.is_running():
-            asyncio.run_coroutine_threadsafe(self._on_message(data), self._loop)
+            try:
+                asyncio.run_coroutine_threadsafe(self._on_message(data), self._loop)
+            except RuntimeError:
+                logger.debug("Feishu: event loop closed, dropping message")
 
     async def _on_message(self, data: "P2ImMessageReceiveV1") -> None:
         """Handle incoming message from Feishu."""

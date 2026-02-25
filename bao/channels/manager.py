@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Any
 
 from loguru import logger
@@ -199,7 +200,8 @@ class ChannelManager:
                 msg = await asyncio.wait_for(self.bus.consume_outbound(), timeout=1.0)
                 channel = self.channels.get(msg.channel)
                 if not channel:
-                    logger.warning("Unknown channel: {}", msg.channel)
+                    if msg.channel != "desktop":
+                        logger.warning("Unknown channel: {}", msg.channel)
                     continue
                 if msg.metadata.get("_progress"):
                     is_tool_hint = msg.metadata.get("_tool_hint", False)
@@ -220,6 +222,7 @@ class ChannelManager:
                         )
                     if not is_tool_hint and not allow_progress:
                         continue
+                msg = self._transform_coding_meta(msg)
                 try:
                     await channel.send(msg)
                 except Exception as e:
@@ -232,6 +235,79 @@ class ChannelManager:
     def get_channel(self, name: str) -> BaseChannel | None:
         """Get a channel by name."""
         return self.channels.get(name)
+
+    @staticmethod
+    def _parse_meta_line(content: str, marker: str) -> tuple[dict[str, Any] | None, str]:
+        if marker not in content:
+            return None, content
+        lines = content.splitlines()
+        meta: dict[str, Any] | None = None
+        kept: list[str] = []
+        for line in lines:
+            if line.startswith(marker) and meta is None:
+                raw = line.split("=", 1)[1].strip()
+                try:
+                    parsed = json.loads(raw)
+                    if isinstance(parsed, dict):
+                        meta = parsed
+                        continue
+                except Exception:
+                    pass
+            kept.append(line)
+        cleaned = "\n".join(kept).rstrip("\n")
+        return meta, cleaned
+
+    @staticmethod
+    def _render_coding_status(provider: str, meta: dict[str, Any]) -> str:
+        status = str(meta.get("status") or "unknown")
+        icon = {"success": "✅", "error": "❌", "timeout": "⏱️"}.get(status, "⌨️")
+        attempts = meta.get("attempts")
+        duration_ms = meta.get("duration_ms")
+        session_id = meta.get("session_id")
+        error_type = meta.get("error_type")
+
+        parts = [f"{icon} {provider} status: {status}"]
+        if isinstance(attempts, int):
+            parts.append(f"attempts={attempts}")
+        if isinstance(duration_ms, int):
+            parts.append(f"duration={duration_ms / 1000:.1f}s")
+        if isinstance(session_id, str) and session_id:
+            parts.append(f"session={session_id}")
+        if isinstance(error_type, str) and error_type:
+            parts.append(f"error={error_type}")
+        return " | ".join(parts)
+
+    def _transform_coding_meta(self, msg: OutboundMessage) -> OutboundMessage:
+        if msg.metadata.get("_progress"):
+            return msg
+        if not msg.content:
+            return msg
+        for provider, marker, meta_key, status_key in (
+            ("OpenCode", "OPENCODE_META=", "_opencode_meta", "_opencode_status"),
+            ("Codex", "CODEX_META=", "_codex_meta", "_codex_status"),
+            ("Claude Code", "CLAUDECODE_META=", "_claudecode_meta", "_claudecode_status"),
+        ):
+            meta, cleaned = self._parse_meta_line(msg.content, marker)
+            if not meta:
+                continue
+            lines = cleaned.splitlines()
+            if lines and lines[0].strip().lower() == f"{provider} completed successfully.".lower():
+                cleaned = "\n".join(lines[1:]).lstrip("\n")
+            status_line = self._render_coding_status(provider, meta)
+            final_content = status_line if not cleaned else f"{status_line}\n\n{cleaned}"
+            new_meta = dict(msg.metadata)
+            new_meta[meta_key] = meta
+            new_meta[status_key] = str(meta.get("status") or "unknown")
+            return OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content=final_content,
+                reply_to=msg.reply_to,
+                media=msg.media,
+                metadata=new_meta,
+            )
+
+        return msg
 
     def get_status(self) -> dict[str, Any]:
         """Get status of all channels."""

@@ -1,7 +1,10 @@
 """WhatsApp channel implementation using Node.js bridge."""
 
 import asyncio
+import base64
 import json
+import mimetypes
+from pathlib import Path
 from typing import Any
 
 from loguru import logger
@@ -9,8 +12,8 @@ from loguru import logger
 from bao.bus.events import OutboundMessage
 from bao.bus.queue import MessageBus
 from bao.channels.base import BaseChannel
-from bao.config.schema import WhatsAppConfig
 from bao.channels.progress_text import ProgressBuffer
+from bao.config.schema import WhatsAppConfig
 
 
 class WhatsAppChannel(BaseChannel):
@@ -103,6 +106,24 @@ class WhatsAppChannel(BaseChannel):
         except Exception as e:
             logger.error("Error sending WhatsApp message: {}", e)
 
+    def _save_media(self, media: dict[str, Any], sender_id: str) -> list[str]:
+        """Decode base64 media from bridge and save to disk."""
+        try:
+            raw = base64.b64decode(media["data"])
+            mimetype = media.get("mimetype", "application/octet-stream")
+            filename = media.get("filename")
+            if not filename:
+                ext = mimetypes.guess_extension(mimetype) or ""
+                filename = f"wa_{sender_id}_{id(raw):x}{ext}"
+            media_dir = Path.home() / ".bao" / "media"
+            media_dir.mkdir(parents=True, exist_ok=True)
+            path = media_dir / filename.replace("/", "_")
+            path.write_bytes(raw)
+            logger.debug("Saved WhatsApp media: {}", path)
+            return [str(path)]
+        except Exception as e:
+            logger.warning("Failed to save WhatsApp media: ", e)
+            return []
     async def _handle_bridge_message(self, raw: str | bytes) -> None:
         """Handle a message from the bridge."""
         if isinstance(raw, bytes):
@@ -116,30 +137,28 @@ class WhatsAppChannel(BaseChannel):
         msg_type = data.get("type")
 
         if msg_type == "message":
-            # Incoming message from WhatsApp
-            # Deprecated by whatsapp: old phone number style typically: <phone>@s.whatspp.net
             pn = data.get("pn", "")
-            # New LID sytle typically:
             sender = data.get("sender", "")
             content = data.get("content", "")
-
-            # Extract just the phone number or lid as chat_id
             user_id = pn if pn else sender
             sender_id = user_id.split("@")[0] if "@" in user_id else user_id
             logger.info("Sender {}", sender)
 
-            # Handle voice transcription if it's a voice message
-            if content == "[Voice Message]":
-                logger.info(
-                    "Voice message received from {}, but direct download from bridge is not yet supported.",
-                    sender_id,
-                )
+            # Save media from bridge if present
+            media_paths: list[str] = []
+            media_data = data.get("media")
+            if media_data and isinstance(media_data, dict):
+                media_paths = self._save_media(media_data, sender_id)
+
+            # Voice message placeholder
+            if content == "[Voice Message]" and not media_paths:
                 content = "[Voice Message: Transcription not available for WhatsApp yet]"
 
             await self._handle_message(
                 sender_id=sender_id,
-                chat_id=sender,  # Use full LID for replies
+                chat_id=sender,
                 content=content,
+                media=media_paths,
                 metadata={
                     "message_id": data.get("id"),
                     "timestamp": data.get("timestamp"),

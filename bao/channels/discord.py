@@ -14,7 +14,6 @@ from bao.bus.queue import MessageBus
 from bao.channels.base import BaseChannel
 from bao.config.schema import DiscordConfig
 
-
 DISCORD_API_BASE = "https://discord.com/api/v10"
 MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024  # 20MB
 MAX_MESSAGE_LEN = 2000  # Discord message character limit
@@ -55,6 +54,11 @@ class DiscordChannel(BaseChannel):
         self._heartbeat_task: asyncio.Task | None = None
         self._typing_tasks: dict[str, asyncio.Task] = {}
         self._http: httpx.AsyncClient | None = None
+        # RESUME support
+        self._session_id: str | None = None
+        self._resume_gateway_url: str | None = None
+        self._heartbeat_acked: bool = True
+        self._should_resume: bool = False
 
     async def start(self) -> None:
         """Start the Discord gateway connection."""
@@ -67,8 +71,10 @@ class DiscordChannel(BaseChannel):
 
         while self._running:
             try:
+                # Use resume URL if available, otherwise default gateway
+                url = self._resume_gateway_url or self.config.gateway_url
                 logger.info("Connecting to Discord gateway...")
-                async with websockets.connect(self.config.gateway_url) as ws:
+                async with websockets.connect(url) as ws:
                     self._ws = ws
                     await self._gateway_loop()
             except asyncio.CancelledError:
@@ -145,7 +151,7 @@ class DiscordChannel(BaseChannel):
         return False
 
     async def _gateway_loop(self) -> None:
-        """Main gateway loop: identify, heartbeat, dispatch events."""
+        """Main gateway loop: identify/resume, heartbeat, dispatch events."""
         if not self._ws:
             return
 
@@ -165,23 +171,41 @@ class DiscordChannel(BaseChannel):
                 self._seq = seq
 
             if op == 10:
-                # HELLO: start heartbeat and identify
+                # HELLO: start heartbeat, then identify or resume
                 interval_ms = payload.get("heartbeat_interval", 45000)
                 await self._start_heartbeat(interval_ms / 1000)
-                await self._identify()
+                if self._should_resume and self._session_id:
+                    await self._resume()
+                else:
+                    await self._identify()
+            elif op == 11:
+                # HEARTBEAT_ACK: connection is alive
+                self._heartbeat_acked = True
             elif op == 0 and event_type == "READY":
-                logger.info("Discord gateway READY")
+                # Store session info for future RESUME
+                self._session_id = payload.get("session_id")
+                self._resume_gateway_url = payload.get("resume_gateway_url")
+                self._should_resume = True
+                logger.info("Discord gateway READY (session={})", self._session_id)
+            elif op == 0 and event_type == "RESUMED":
+                logger.info("Discord gateway RESUMED successfully")
             elif op == 0 and event_type == "MESSAGE_CREATE":
                 await self._handle_message_create(payload)
             elif op == 7:
-                # RECONNECT: exit loop to reconnect
+                # RECONNECT: server requests reconnect, try RESUME
                 logger.info("Discord gateway requested reconnect")
+                self._should_resume = True
                 break
             elif op == 9:
-                # INVALID_SESSION: reconnect
-                logger.warning("Discord gateway invalid session")
+                # INVALID_SESSION: d=true means resumable, d=false means fresh identify
+                resumable = payload is True
+                logger.warning("Discord invalid session (resumable={})", resumable)
+                self._should_resume = resumable
+                if not resumable:
+                    self._session_id = None
+                    self._resume_gateway_url = None
+                await asyncio.sleep(1 + 4 * (not resumable))  # 1s if resumable, 5s if not
                 break
-
     async def _identify(self) -> None:
         """Send IDENTIFY payload."""
         if not self._ws:
@@ -201,16 +225,36 @@ class DiscordChannel(BaseChannel):
         }
         await self._ws.send(json.dumps(identify, ensure_ascii=False))
 
+    async def _resume(self) -> None:
+        """Send RESUME payload to replay missed events."""
+        if not self._ws:
+            return
+        resume = {
+            "op": 6,
+            "d": {
+                "token": self.config.token,
+                "session_id": self._session_id,
+                "seq": self._seq,
+            },
+        }
+        logger.info("Discord sending RESUME (seq={})", self._seq)
+        await self._ws.send(json.dumps(resume, ensure_ascii=False))
+
     async def _start_heartbeat(self, interval_s: float) -> None:
-        """Start or restart the heartbeat loop."""
+        """Start or restart the heartbeat loop with ACK-based zombie detection."""
         if self._heartbeat_task:
             self._heartbeat_task.cancel()
+        self._heartbeat_acked = True
 
         async def heartbeat_loop() -> None:
             while self._running and self._ws:
-                payload = {"op": 1, "d": self._seq}
+                if not self._heartbeat_acked:
+                    logger.warning("Discord heartbeat ACK not received — zombie connection, reconnecting")
+                    await self._ws.close()
+                    break
+                self._heartbeat_acked = False
                 try:
-                    await self._ws.send(json.dumps(payload, ensure_ascii=False))
+                    await self._ws.send(json.dumps({"op": 1, "d": self._seq}, ensure_ascii=False))
                 except Exception as e:
                     logger.warning("Discord heartbeat failed: {}", e)
                     break
