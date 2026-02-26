@@ -232,10 +232,7 @@ class AgentLoop:
                 if on_progress and clean:
                     await on_progress(clean)
                 messages = self.context.add_assistant_message(
-                    messages,
-                    clean,
-                    tool_calls=None,
-                    reasoning_content=response.reasoning_content,
+                    messages, clean, reasoning_content=response.reasoning_content,
                 )
                 final_content = clean
                 break
