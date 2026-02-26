@@ -353,24 +353,19 @@ pip install nanobot-ai[matrix]
 }
 ```
 
-> `allowFrom`: Empty allows all senders; set user IDs to restrict access.
-> `groupPolicy`: `open`, `mention`, or `allowlist`.
-> `groupAllowFrom`: Room allowlist used when `groupPolicy` is `allowlist`.
-> `allowRoomMentions`: If `true`, accepts `@room` (`m.mentions.room`) in mention mode.
-> `e2eeEnabled`: Enables Matrix E2EE support (default `true`); set `false` only for plaintext-only setups.
-> `maxMediaBytes`: Max attachment size in bytes (default `20MB`) for inbound and outbound media handling; set to `0` to block all inbound and outbound attachment uploads.
+> Keep a persistent `matrix-store` and stable `deviceId` — encrypted session state is lost if these change across restarts.
 
-> [!NOTE]
-> Matrix E2EE implications:
->
-> - Keep a persistent `matrix-store` and stable `deviceId`; otherwise encrypted session state can be lost after restart.
-> - In newly joined encrypted rooms, initial messages may fail until Olm/Megolm sessions are established.
-> - With `e2eeEnabled=false`, encrypted room messages may be undecryptable and E2EE send safeguards are not applied.
-> - With `e2eeEnabled=true`, the bot sends with `ignore_unverified_devices=true` (more compatible, less strict than verified-only sending).
-> - Changing `accessToken`/`deviceId` effectively creates a new device and may require session re-establishment.
-> - Outbound attachments are sent from `OutboundMessage.media`.
-> - Effective media limit (inbound + outbound) uses the stricter value of local `maxMediaBytes` and homeserver `m.upload.size` (if advertised).
-> - If `tools.restrictToWorkspace=true`, Matrix outbound attachments are limited to files inside the workspace.
+| Option | Description |
+|--------|-------------|
+| `allowFrom` | User IDs allowed to interact. Empty = all senders. |
+| `groupPolicy` | `open` (default), `mention`, or `allowlist`. |
+| `groupAllowFrom` | Room allowlist (used when policy is `allowlist`). |
+| `allowRoomMentions` | Accept `@room` mentions in mention mode. |
+| `e2eeEnabled` | E2EE support (default `true`). Set `false` for plaintext-only. |
+| `maxMediaBytes` | Max attachment size (default `20MB`). Set `0` to block all media. |
+
+
+
 
 **4. Run**
 
