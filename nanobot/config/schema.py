@@ -6,6 +6,7 @@ from typing import Literal
 from pydantic import BaseModel, Field, ConfigDict
 from pydantic.alias_generators import to_camel
 from pydantic_settings import BaseSettings
+from typing import Literal
 
 
 class Base(BaseModel):
@@ -183,6 +184,24 @@ class QQConfig(Base):
     secret: str = ""  # 机器人密钥 (AppSecret) from q.qq.com
     allow_from: list[str] = Field(default_factory=list)  # Allowed user openids (empty = public access)
 
+class MatrixConfig(Base):
+    """Matrix (Element) channel configuration."""
+
+    enabled: bool = False
+    homeserver: str = "https://matrix.org"
+    access_token: str = ""
+    user_id: str = ""  # @bot:matrix.org
+    device_id: str = ""
+    # Enable Matrix E2EE support (encryption + encrypted room handling).
+    e2ee_enabled: bool = True
+    # Max seconds to wait for sync_forever to stop gracefully before cancellation fallback.
+    sync_stop_grace_seconds: int = 2
+    # Max attachment size accepted for Matrix media handling (inbound + outbound).
+    max_media_bytes: int = 20 * 1024 * 1024
+    allow_from: list[str] = Field(default_factory=list)
+    group_policy: Literal["open", "mention", "allowlist"] = "open"
+    group_allow_from: list[str] = Field(default_factory=list)
+    allow_room_mentions: bool = False
 
 class ChannelsConfig(Base):
     """Configuration for chat channels."""
