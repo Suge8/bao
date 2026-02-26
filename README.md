@@ -312,7 +312,11 @@ nanobot gateway
 <details>
 <summary><b>Matrix (Element)</b></summary>
 
-Uses Matrix sync via `matrix-nio` (inbound media + outbound file attachments).
+Install Matrix dependencies first:
+
+```bash
+pip install nanobot-ai[matrix]
+```
 
 **1. Create/choose a Matrix account**
 
