@@ -472,8 +472,6 @@ class AgentLoop:
                 and isinstance(entry.get("content"), str)
                 and entry["content"].startswith(ContextBuilder._RUNTIME_CONTEXT_TAG)
             ):
-                # Runtime metadata is injected per-turn for model context only; do not persist it
-                # into long-lived session history to avoid semantic drift and repetitive replies.
                 continue
             if entry.get("role") == "user" and isinstance(entry.get("content"), list):
                 entry["content"] = [
