@@ -469,6 +469,14 @@ class AgentLoop:
                 content = entry["content"]
                 if len(content) > self._TOOL_RESULT_MAX_CHARS:
                     entry["content"] = content[:self._TOOL_RESULT_MAX_CHARS] + "\n... (truncated)"
+            if entry.get("role") == "user" and isinstance(entry.get("content"), list):
+                entry["content"] = [
+                    {"type": "text", "text": "[image]"} if (
+                        c.get("type") == "image_url"
+                        and c.get("image_url", {}).get("url", "").startswith("data:image/")
+                    ) else c
+                    for c in entry["content"]
+                ]
             entry.setdefault("timestamp", datetime.now().isoformat())
             session.messages.append(entry)
         session.updated_at = datetime.now()
