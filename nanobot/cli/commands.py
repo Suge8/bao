@@ -20,6 +20,7 @@ from prompt_toolkit.patch_stdout import patch_stdout
 
 from nanobot import __version__, __logo__
 from nanobot.config.schema import Config
+from nanobot.utils.helpers import sync_workspace_templates
 
 app = typer.Typer(
     name="nanobot",
@@ -185,8 +186,6 @@ def onboard():
         workspace.mkdir(parents=True, exist_ok=True)
         console.print(f"[green]✓[/green] Created workspace at {workspace}")
     
-    # Create default bootstrap files
-    from nanobot.utils.helpers import sync_workspace_templates
     sync_workspace_templates(workspace)
     
     console.print(f"\n{__logo__} nanobot is ready!")
@@ -265,7 +264,6 @@ def gateway(
     console.print(f"{__logo__} Starting nanobot gateway on port {port}...")
     
     config = load_config()
-    from nanobot.utils.helpers import sync_workspace_templates
     sync_workspace_templates(config.workspace_path)
     bus = MessageBus()
     provider = _make_provider(config)
@@ -420,7 +418,6 @@ def agent(
     from loguru import logger
     
     config = load_config()
-    from nanobot.utils.helpers import sync_workspace_templates
     sync_workspace_templates(config.workspace_path)
     
     bus = MessageBus()
@@ -983,8 +980,6 @@ def status():
     config_path = get_config_path()
     config = load_config()
     workspace = config.workspace_path
-    from nanobot.utils.helpers import sync_workspace_templates
-    sync_workspace_templates(workspace)
 
     console.print(f"{__logo__} nanobot Status\n")
 
