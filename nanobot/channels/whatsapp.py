@@ -2,7 +2,7 @@
 
 import asyncio
 import json
-from collections import deque
+from collections import OrderedDict
 from typing import Any
 
 from loguru import logger
@@ -22,14 +22,13 @@ class WhatsAppChannel(BaseChannel):
     """
 
     name = "whatsapp"
-    MAX_PROCESSED_MESSAGE_IDS = 2000
 
     def __init__(self, config: WhatsAppConfig, bus: MessageBus):
         super().__init__(config, bus)
         self.config: WhatsAppConfig = config
         self._ws = None
         self._connected = False
-        self._processed_message_ids: deque[str] = deque(maxlen=self.MAX_PROCESSED_MESSAGE_IDS)
+        self._processed_message_ids: OrderedDict[str, None] = OrderedDict()
     
     async def start(self) -> None:
         """Start the WhatsApp channel by connecting to the bridge."""
@@ -113,13 +112,12 @@ class WhatsAppChannel(BaseChannel):
             content = data.get("content", "")
             message_id = data.get("id", "")
 
-            # Dedup by message ID to prevent loops
-            if message_id and message_id in self._processed_message_ids:
-                logger.debug("Duplicate message {}, skipping", message_id)
-                return
-
             if message_id:
-                self._processed_message_ids.append(message_id)
+                if message_id in self._processed_message_ids:
+                    return
+                self._processed_message_ids[message_id] = None
+                while len(self._processed_message_ids) > 1000:
+                    self._processed_message_ids.popitem(last=False)
 
             # Extract just the phone number or lid as chat_id
             user_id = pn if pn else sender
