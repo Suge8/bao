@@ -311,8 +311,8 @@ class FeishuChannel(BaseChannel):
                     self._ws_client.start()
                 except Exception as e:
                     logger.warning("Feishu WebSocket error: {}", e)
-                if self._running:
-                    import time; time.sleep(5)
+                    if self._running:
+                        import time; time.sleep(5)
         
         self._ws_thread = threading.Thread(target=run_ws, daemon=True)
         self._ws_thread.start()
@@ -327,11 +327,6 @@ class FeishuChannel(BaseChannel):
     async def stop(self) -> None:
         """Stop the Feishu bot."""
         self._running = False
-        if self._ws_client:
-            try:
-                self._ws_client.stop()
-            except Exception as e:
-                logger.warning("Error stopping WebSocket client: {}", e)
         logger.info("Feishu bot stopped")
     
     def _add_reaction_sync(self, message_id: str, emoji_type: str) -> None:
