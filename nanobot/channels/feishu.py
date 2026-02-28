@@ -311,8 +311,8 @@ class FeishuChannel(BaseChannel):
                     self._ws_client.start()
                 except Exception as e:
                     logger.warning("Feishu WebSocket error: {}", e)
-                    if self._running:
-                        import time; time.sleep(5)
+                if self._running:
+                    import time; time.sleep(5)
         
         self._ws_thread = threading.Thread(target=run_ws, daemon=True)
         self._ws_thread.start()
