@@ -221,18 +221,32 @@ def _extract_post_content(content_json: dict) -> tuple[str, list[str]]:
         text = " ".join(text_parts).strip() if text_parts else None
         return text, image_keys
     
+    # Compatible with both shapes:
+    # 1) {"post": {"zh_cn": {...}}}
+    # 2) {"zh_cn": {...}} or {"title": "...", "content": [...]}
+    post_root = content_json.get("post") if isinstance(content_json, dict) else None
+    if not isinstance(post_root, dict):
+        post_root = content_json if isinstance(content_json, dict) else {}
+
     # Try direct format first
-    if "content" in content_json:
-        text, images = extract_from_lang(content_json)
+    if "content" in post_root:
+        text, images = extract_from_lang(post_root)
         if text or images:
             return text or "", images
     
     # Try localized format
     for lang_key in ("zh_cn", "en_us", "ja_jp"):
-        lang_content = content_json.get(lang_key)
+        lang_content = post_root.get(lang_key)
         text, images = extract_from_lang(lang_content)
         if text or images:
             return text or "", images
+
+    # Fallback: first dict-shaped child
+    for value in post_root.values():
+        if isinstance(value, dict):
+            text, images = extract_from_lang(value)
+            if text or images:
+                return text or "", images
     
     return "", []
 
