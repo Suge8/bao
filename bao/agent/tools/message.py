@@ -1,5 +1,6 @@
 """Message tool for sending messages to users."""
 
+from contextvars import ContextVar
 from typing import Any, Awaitable, Callable
 
 from bao.agent.tools.base import Tool
@@ -17,16 +18,33 @@ class MessageTool(Tool):
         default_message_id: str | None = None,
     ):
         self._send_callback = send_callback
-        self._default_channel = default_channel
-        self._default_chat_id = default_chat_id
-        self._default_message_id = default_message_id
-        self._sent_in_turn: bool = False
+        self._default_channel_ctx: ContextVar[str] = ContextVar(
+            "message_default_channel", default=default_channel
+        )
+        self._default_chat_id_ctx: ContextVar[str] = ContextVar(
+            "message_default_chat_id", default=default_chat_id
+        )
+        self._default_message_id_ctx: ContextVar[str | None] = ContextVar(
+            "message_default_message_id", default=default_message_id
+        )
+        self._sent_in_turn_ctx: ContextVar[bool] = ContextVar("message_sent_in_turn", default=False)
+        self._last_sent_summary_ctx: ContextVar[str | None] = ContextVar(
+            "message_last_sent_summary", default=None
+        )
+
+    @property
+    def _sent_in_turn(self) -> bool:
+        return self._sent_in_turn_ctx.get()
+
+    @_sent_in_turn.setter
+    def _sent_in_turn(self, value: bool) -> None:
+        self._sent_in_turn_ctx.set(bool(value))
 
     def set_context(self, channel: str, chat_id: str, message_id: str | None = None) -> None:
         """Set the current message context."""
-        self._default_channel = channel
-        self._default_chat_id = chat_id
-        self._default_message_id = message_id
+        self._default_channel_ctx.set(channel)
+        self._default_chat_id_ctx.set(chat_id)
+        self._default_message_id_ctx.set(message_id)
 
     def set_send_callback(self, callback: Callable[[OutboundMessage], Awaitable[None]]) -> None:
         """Set the callback for sending messages."""
@@ -35,6 +53,11 @@ class MessageTool(Tool):
     def start_turn(self) -> None:
         """Reset per-turn send tracking."""
         self._sent_in_turn = False
+        self._last_sent_summary_ctx.set(None)
+
+    @property
+    def last_sent_summary(self) -> str | None:
+        return self._last_sent_summary_ctx.get()
 
     @property
     def name(self) -> str:
@@ -42,46 +65,59 @@ class MessageTool(Tool):
 
     @property
     def description(self) -> str:
-        return "Send a message to the user. Use this when you want to communicate something."
+        return "Send a message to the user."
 
     @property
     def parameters(self) -> dict[str, Any]:
         return {
             "type": "object",
             "properties": {
-                "content": {
-                    "type": "string",
-                    "description": "The message content to send"
-                },
+                "content": {"type": "string", "description": "The message content to send"},
                 "channel": {
                     "type": "string",
-                    "description": "Optional: target channel (telegram, discord, etc.)"
+                    "description": "Optional: target channel (telegram, discord, etc.)",
                 },
-                "chat_id": {
+                "chat_id": {"type": "string", "description": "Optional: target chat/user ID"},
+                "reply_to": {
                     "type": "string",
-                    "description": "Optional: target chat/user ID"
+                    "description": "Optional: target message ID to reply to",
                 },
                 "media": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Optional: list of file paths to attach (images, audio, documents)"
-                }
+                    "description": "Optional: list of file paths to attach (images, audio, documents)",
+                },
             },
-            "required": ["content"]
+            "required": ["content"],
         }
 
-    async def execute(
-        self,
-        content: str,
-        channel: str | None = None,
-        chat_id: str | None = None,
-        message_id: str | None = None,
-        media: list[str] | None = None,
-        **kwargs: Any
-    ) -> str:
-        channel = channel or self._default_channel
-        chat_id = chat_id or self._default_chat_id
-        message_id = message_id or self._default_message_id
+    async def execute(self, **kwargs: Any) -> str:
+        content = kwargs.get("content", "")
+        channel = kwargs.get("channel")
+        chat_id = kwargs.get("chat_id")
+        reply_to = kwargs.get("reply_to")
+        message_id = kwargs.get("message_id")
+        media = kwargs.get("media")
+
+        if not isinstance(content, str):
+            return "Error: content must be a string"
+
+        if reply_to is not None and not isinstance(reply_to, str):
+            return "Error: reply_to must be a string"
+
+        if media is not None and not isinstance(media, list):
+            return "Error: media must be a list of file paths"
+
+        default_channel = self._default_channel_ctx.get()
+        default_chat_id = self._default_chat_id_ctx.get()
+        default_message_id = self._default_message_id_ctx.get()
+
+        channel = channel or default_channel
+        chat_id = chat_id or default_chat_id
+        message_id = message_id or default_message_id
+
+        if channel == "desktop":
+            return "Error: message tool cannot send to desktop channel. Reply normally instead."
 
         if not content or not content.strip():
             return "Error: message content is empty. Provide non-empty content to send."
@@ -91,23 +127,32 @@ class MessageTool(Tool):
 
         if not self._send_callback:
             return "Error: Message sending not configured"
+
+        if self._sent_in_turn:
+            return "Error: message tool already sent once in this turn. Do not call message again."
+
         msg = OutboundMessage(
             channel=channel,
             chat_id=chat_id,
             content=content,
+            reply_to=reply_to or message_id,
             media=media or [],
             metadata={
                 "message_id": message_id,
-            }
+            },
         )
 
         try:
             await self._send_callback(msg)
-            self._sent_in_turn = True
+            if channel == default_channel and chat_id == default_chat_id:
+                self._sent_in_turn = True
             media_info = f" +{len(media)} files" if media else ""
             preview = content[:60].replace("\n", " ").replace("\r", "")
             if len(content) > 60:
                 preview += "..."
-            return f"Sent({channel}:{chat_id}{media_info}): {preview}"
+            self._last_sent_summary_ctx.set(
+                f"[message tool sent] {channel}:{chat_id}{media_info} {preview}"
+            )
+            return f"Message sent to {channel}:{chat_id}{media_info}: {preview}"
         except Exception as e:
             return f"Error sending message: {str(e)}"
