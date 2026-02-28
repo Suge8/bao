@@ -114,15 +114,15 @@ class HeartbeatService:
     async def start(self) -> None:
         """Start the heartbeat service."""
         if not self.enabled:
-            logger.info("Heartbeat disabled")
+            logger.info("💓 心跳已禁用 / disabled")
             return
         if self._running:
-            logger.warning("Heartbeat already running")
+            logger.warning("⚠️ 心跳已运行 / already running")
             return
 
         self._running = True
         self._task = asyncio.create_task(self._run_loop())
-        logger.info("Heartbeat started (every {}s)", self.interval_s)
+        logger.info("💓 心跳已启动 / started ({}s)", self.interval_s)
 
     def stop(self) -> None:
         """Stop the heartbeat service."""
@@ -141,32 +141,32 @@ class HeartbeatService:
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.error("Heartbeat error: {}", e)
+                logger.error("❌ 心跳异常 / loop error: {}", e)
 
     async def _tick(self) -> None:
         """Execute a single heartbeat tick."""
         content = self._read_heartbeat_file()
         if not content:
-            logger.debug("Heartbeat: HEARTBEAT.md missing or empty")
+            logger.debug("💓 心跳文件缺失 / file missing: HEARTBEAT.md missing or empty")
             return
 
-        logger.info("Heartbeat: checking for tasks...")
+        logger.debug("💓 心跳检查任务 / checking tasks")
 
         try:
             action, tasks = await self._decide(content)
 
             if action != "run":
-                logger.info("Heartbeat: OK (nothing to report)")
+                logger.debug("💓 心跳无需上报 / nothing to report")
                 return
 
-            logger.info("Heartbeat: tasks found, executing...")
+            logger.info("💓 心跳发现任务 / tasks found: executing")
             if self.on_execute:
                 response = await self.on_execute(tasks)
                 if response and self.on_notify:
-                    logger.info("Heartbeat: completed, delivering response")
+                    logger.info("💓 心跳执行完成 / completed: delivering response")
                     await self.on_notify(response)
         except Exception:
-            logger.exception("Heartbeat execution failed")
+            logger.exception("❌ 心跳执行失败 / execution failed")
 
     async def trigger_now(self) -> str | None:
         """Manually trigger a heartbeat."""

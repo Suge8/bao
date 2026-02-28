@@ -70,7 +70,7 @@ def build_gateway_stack(config: Any, provider: Any) -> GatewayStack:
                 chat_id=job.payload.to or "direct",
             )
         except Exception as e:
-            logger.warning("Cron job {} failed: {}", job.id, e)
+            logger.warning("⚠️ 定时任务失败 / cron failed: {} — {}", job.id, e)
             return f"Error: {e}"
         if job.payload.deliver and job.payload.to:
             await bus.publish_outbound(
@@ -164,7 +164,7 @@ async def send_startup_greeting(
             if isawaitable(maybe):
                 await maybe
         except Exception as e:
-            logger.warning("{} desktop greeting callback failed: {}", phase, e)
+            logger.warning("⚠️ 桌面回调失败 / callback failed: {} — {}", phase, e)
 
     await asyncio.sleep(5)
 
@@ -176,7 +176,7 @@ async def send_startup_greeting(
 
     def _add_target(channel_name: str, chat_id: str) -> None:
         if not chat_id:
-            logger.warning("Skip startup greeting target for {} due to empty chat_id", channel_name)
+            logger.warning("⚠️ 问候目标跳过 / target skipped: {} empty chat_id", channel_name)
             return
         pair = (channel_name, chat_id)
         if pair in seen_targets:
@@ -205,7 +205,7 @@ async def send_startup_greeting(
         for uid in wa.allow_from:
             bare = _extract_primary_id(uid)
             if not bare:
-                logger.warning("Skip startup greeting target for whatsapp due to empty id")
+                logger.warning("⚠️ 问候目标跳过 / target skipped: whatsapp empty id")
                 continue
             jid = bare if "@" in bare else f"{bare}@s.whatsapp.net"
             _add_target("whatsapp", jid)
@@ -232,7 +232,7 @@ async def send_startup_greeting(
                     OutboundMessage(channel=ch, chat_id=cid, content=content)
                 )
             except Exception as e:
-                logger.warning("Onboarding to {}:{} failed: {}", ch, cid, e)
+                logger.warning("⚠️ 入门问候失败 / onboarding failed: {}:{} — {}", ch, cid, e)
         await _emit_desktop_greeting(content, "Onboarding")
         return
 
@@ -258,7 +258,7 @@ async def send_startup_greeting(
                 ephemeral=True,
             )
         except Exception as e:
-            logger.warning("Startup greeting to {}:{} failed: {}", channel, chat_id, e)
+            logger.warning("⚠️ 启动问候失败 / startup failed: {}:{} — {}", channel, chat_id, e)
             return None
         if not text:
             return None
@@ -277,14 +277,14 @@ async def send_startup_greeting(
                     except Exception as e:
                         session.messages.insert(i, removed)
                         logger.warning(
-                            "Startup prompt cleanup persist failed for {}:{}: {}",
+                            "⚠️ 提示清理落库失败 / cleanup persist failed: {}:{} — {}",
                             channel,
                             chat_id,
                             e,
                         )
                     break
         except Exception as e:
-            logger.warning("Startup prompt cleanup failed for {}:{}: {}", channel, chat_id, e)
+            logger.warning("⚠️ 提示清理失败 / cleanup failed: {}:{} — {}", channel, chat_id, e)
         return text
 
     # External channels
@@ -294,7 +294,7 @@ async def send_startup_greeting(
             try:
                 await bus.publish_outbound(OutboundMessage(channel=ch, chat_id=cid, content=text))
             except Exception as e:
-                logger.warning("Send greeting to {}:{} failed: {}", ch, cid, e)
+                logger.warning("⚠️ 问候发送失败 / send failed: {}:{} — {}", ch, cid, e)
 
     # Desktop channel (not in ChannelManager, uses callback)
     if on_desktop_greeting:
