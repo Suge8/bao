@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
-import pytest
-
-from PySide6.QtGui import QGuiApplication
+import importlib
 import sys
+
+pytest = importlib.import_module("pytest")
+
+QtGui = pytest.importorskip("PySide6.QtGui")
+QtCore = pytest.importorskip("PySide6.QtCore")
+QGuiApplication = QtGui.QGuiApplication
+Qt = QtCore.Qt
 
 
 # Need a QGuiApplication instance for Qt models
@@ -15,12 +20,14 @@ def qapp():
     yield app
 
 
-from app.backend.chat import ChatMessageModel
-from PySide6.QtCore import Qt
+def _new_model():
+    from app.backend.chat import ChatMessageModel
+
+    return ChatMessageModel()
 
 
 def test_append_user(qapp):
-    m = ChatMessageModel()
+    m = _new_model()
     row = m.append_user("hello")
     assert row == 0
     assert m.rowCount() == 1
@@ -30,7 +37,7 @@ def test_append_user(qapp):
 
 
 def test_append_assistant(qapp):
-    m = ChatMessageModel()
+    m = _new_model()
     row = m.append_assistant("hi there")
     assert row == 0
     idx = m.index(0)
@@ -40,7 +47,7 @@ def test_append_assistant(qapp):
 
 
 def test_update_content(qapp):
-    m = ChatMessageModel()
+    m = _new_model()
     row = m.append_assistant("")
     m.update_content(row, "partial")
     idx = m.index(row)
@@ -48,7 +55,7 @@ def test_update_content(qapp):
 
 
 def test_set_status(qapp):
-    m = ChatMessageModel()
+    m = _new_model()
     row = m.append_assistant("done text", status="typing")
     m.set_status(row, "done")
     idx = m.index(row)
@@ -56,7 +63,7 @@ def test_set_status(qapp):
 
 
 def test_datachanged_only_one_row(qapp):
-    m = ChatMessageModel()
+    m = _new_model()
     m.append_user("a")
     row = m.append_assistant("")
     m.append_user("b")
@@ -75,7 +82,7 @@ def test_large_append(qapp):
     """1000 appends should complete quickly."""
     import time
 
-    m = ChatMessageModel()
+    m = _new_model()
     start = time.time()
     for i in range(1000):
         m.append_user(f"message {i}")
@@ -85,7 +92,7 @@ def test_large_append(qapp):
 
 
 def test_clear(qapp):
-    m = ChatMessageModel()
+    m = _new_model()
     for i in range(5):
         m.append_user(f"msg {i}")
     m.clear()
@@ -93,7 +100,7 @@ def test_clear(qapp):
 
 
 def test_role_names(qapp):
-    m = ChatMessageModel()
+    m = _new_model()
     names = m.roleNames()
     values = list(names.values())
     assert b"content" in values
@@ -103,14 +110,16 @@ def test_role_names(qapp):
 
 def test_load_history_source_renders_as_system(qapp):
     """Messages with _source metadata should render as system bubbles, not user."""
-    m = ChatMessageModel()
-    m.load_history([
-        {"role": "user", "content": "[System: subagent] task done", "_source": "subagent"},
-        {"role": "assistant", "content": "summary"},
-        {"role": "user", "content": "[System: cron] scheduled", "_source": "cron"},
-        {"role": "assistant", "content": "ok"},
-        {"role": "user", "content": "normal user msg"},
-    ])
+    m = _new_model()
+    m.load_history(
+        [
+            {"role": "user", "content": "[System: subagent] task done", "_source": "subagent"},
+            {"role": "assistant", "content": "summary"},
+            {"role": "user", "content": "[System: cron] scheduled", "_source": "cron"},
+            {"role": "assistant", "content": "ok"},
+            {"role": "user", "content": "normal user msg"},
+        ]
+    )
     assert m.rowCount() == 5
     # subagent message → system bubble
     assert m.data(m.index(0), Qt.UserRole + 2) == "system"

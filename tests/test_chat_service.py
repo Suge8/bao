@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
-import sys
 import asyncio
-import pytest
-from unittest.mock import MagicMock, AsyncMock, patch
+import importlib
+import sys
+from unittest.mock import MagicMock, patch
 
-from PySide6.QtCore import QCoreApplication
+pytest = importlib.import_module("pytest")
+
+QtCore = pytest.importorskip("PySide6.QtCore")
+QCoreApplication = QtCore.QCoreApplication
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -16,11 +19,10 @@ def qt_app():
     yield app
 
 
-from app.backend.chat import ChatMessageModel
-from app.backend.gateway import ChatService
-
-
 def make_service():
+    from app.backend.chat import ChatMessageModel
+    from app.backend.gateway import ChatService
+
     model = ChatMessageModel()
     runner = MagicMock()
     svc = ChatService(model, runner)

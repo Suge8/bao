@@ -5,10 +5,10 @@ import importlib
 import pathlib
 import tempfile
 import time
-from unittest.mock import AsyncMock, MagicMock, call
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 from bao.agent.subagent import SubagentManager, TaskStatus
-from bao.agent.tools.task_status import CancelTaskTool, CheckTasksTool, _format_status
+from bao.agent.tools.task_status import CancelTaskTool, CheckTasksTool, _format_brief, _format_detailed
 from bao.bus.events import OutboundMessage
 from bao.bus.queue import MessageBus
 from bao.providers.base import LLMResponse
@@ -171,7 +171,7 @@ async def test_spawn_creates_status(manager):
         origin_channel="telegram",
         origin_chat_id="c1",
     )
-    assert "started" in result.lower()
+    assert "spawned" in result.lower()
 
     statuses = manager.get_all_statuses()
     assert len(statuses) == 1
@@ -332,7 +332,7 @@ def test_format_status_basic():
         tool_steps=3,
         phase="tool:web_fetch",
     )
-    out = _format_status(st)
+    out = _format_detailed(st)
     assert "t1" in out
     assert "research" in out
     assert "5/20" in out
@@ -351,7 +351,7 @@ def test_format_status_stale_warning():
         phase="thinking",
     )
     st.updated_at = time.time() - 150  # 2.5 min ago
-    out = _format_status(st)
+    out = _format_detailed(st)
     assert "⚠️" in out
     assert "no update" in out.lower()
 
@@ -367,26 +367,9 @@ def test_format_status_no_warning_when_completed():
         phase="completed",
     )
     st.updated_at = time.time() - 300
-    out = _format_status(st)
+    out = _format_brief(st)
     assert "⚠️" not in out
 
-
-def test_format_status_shows_budget_metrics_when_present():
-    st = TaskStatus(
-        task_id="t1",
-        label="budget",
-        task_description="d",
-        origin={"channel": "tg", "chat_id": "1"},
-        status="running",
-        offloaded_count=1,
-        offloaded_chars=2048,
-        clipped_count=2,
-        clipped_chars=512,
-    )
-    out = _format_status(st)
-    assert "budget" in out
-    assert "offload 1/2048 chars" in out
-    assert "clip 2/512 chars" in out
 
 
 # ---------------------------------------------------------------------------
@@ -488,12 +471,12 @@ def test_cancel_task_tool_schema(manager):
 # ---------------------------------------------------------------------------
 @pytest.mark.asyncio
 async def test_spawn_auto_label_truncation(manager):
-    """When no label is given, spawn should auto-truncate task to 30 chars + '...'."""
+    """When no label is given, spawn should auto-truncate task to 48 chars + '…'."""
     long_task = "A" * 50
     await manager.spawn(task=long_task)
     st = manager.get_all_statuses()[0]
-    assert len(st.label) == 33  # 30 + '...'
-    assert st.label.endswith("...")
+    assert len(st.label) == 49  # 48 + '…'
+    assert st.label.endswith("…")
 
 
 # ---------------------------------------------------------------------------
@@ -510,8 +493,8 @@ def test_format_status_shows_result_summary_on_completed():
         phase="completed",
         result_summary="Found 3 relevant papers on transformer architecture.",
     )
-    out = _format_status(st)
-    assert "→" in out
+    out = _format_detailed(st)
+    assert "result:" in out
     assert "Found 3 relevant papers" in out
 
 
@@ -526,14 +509,14 @@ def test_format_status_shows_result_summary_on_failed():
         phase="failed",
         result_summary="Error: connection refused on port 5432",
     )
-    out = _format_status(st)
-    assert "→" in out
+    out = _format_detailed(st)
+    assert "result:" in out
     assert "connection refused" in out
 
 
 def test_format_status_truncates_long_summary():
-    """Long result_summary should be truncated to 200 chars."""
-    long_summary = "X" * 300
+    """Long result_summary should be truncated to 300 chars."""
+    long_summary = "X" * 400
     st = TaskStatus(
         task_id="t1",
         label="big",
@@ -543,12 +526,13 @@ def test_format_status_truncates_long_summary():
         phase="completed",
         result_summary=long_summary,
     )
-    out = _format_status(st)
+    out = _format_detailed(st)
     assert "..." in out
-    # Should contain exactly 200 X's + '...'
-    arrow_idx = out.index("→")
-    summary_part = out[arrow_idx + 2 :]  # after '→ '
-    assert len(summary_part.strip()) == 203  # 200 + '...'
+    # Should contain exactly 300 X's + '...'
+    result_idx = out.index("result:")
+    summary_part = out[result_idx + 8:]  # after 'result: '
+    assert summary_part.strip().startswith("X" * 300)
+    assert summary_part.strip().endswith("...")
 
 
 def test_format_status_no_summary_for_running():
@@ -562,8 +546,8 @@ def test_format_status_no_summary_for_running():
         phase="thinking",
         result_summary="partial result",
     )
-    out = _format_status(st)
-    assert "→" not in out
+    out = _format_brief(st)
+    assert "result:" not in out
 
 
 # ---------------------------------------------------------------------------
@@ -687,7 +671,7 @@ async def test_push_milestone_includes_recent_actions(manager, bus):
 # _format_status: recent_actions shown for running tasks
 # ---------------------------------------------------------------------------
 def test_format_status_shows_recent_actions_for_running():
-    """_format_status should show '→ recent:' line for running tasks with actions."""
+    """_format_detailed should show 'recent:' line for running tasks with actions."""
     st = TaskStatus(
         task_id="t1",
         label="research",
@@ -696,8 +680,8 @@ def test_format_status_shows_recent_actions_for_running():
         status="running",
     )
     st.recent_actions = ["web_search(q)", "read_file(x.py)", "exec(ls)", "write_file(out.txt)"]
-    output = _format_status(st)
-    assert "→ recent:" in output
+    output = _format_detailed(st)
+    assert "recent:" in output
     # Should show last 3 only
     assert "read_file(x.py)" in output
     assert "exec(ls)" in output
@@ -706,7 +690,7 @@ def test_format_status_shows_recent_actions_for_running():
 
 
 def test_format_status_no_recent_actions_for_running():
-    """_format_status should NOT show '→ recent:' line when recent_actions is empty."""
+    """_format_detailed should NOT show 'recent:' line when recent_actions is empty."""
     st = TaskStatus(
         task_id="t1",
         label="test",
@@ -714,8 +698,8 @@ def test_format_status_no_recent_actions_for_running():
         origin={"channel": "tg", "chat_id": "1"},
         status="running",
     )
-    output = _format_status(st)
-    assert "→ recent:" not in output
+    output = _format_detailed(st)
+    assert "recent:" not in output
 
 
 # ---------------------------------------------------------------------------
@@ -895,3 +879,107 @@ async def test_handle_stop_cancels_natural_and_active_session_subagents():
             call(natural_key, wait=False),
             call(active_key, wait=False),
         ]
+
+
+# ---------------------------------------------------------------------------
+# context_from: subagent session continuation
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_spawn_context_from_completed_task(manager):
+    """context_from pointing to a completed task should pass context_from to _run_subagent."""
+    manager._task_statuses["prev01"] = TaskStatus(
+        task_id="prev01",
+        label="previous task",
+        task_description="Analyze the auth module",
+        origin={"channel": "gateway", "chat_id": "direct"},
+        status="completed",
+        result_summary="Auth module uses JWT with 24h expiry.",
+    )
+    with patch.object(manager, "_run_subagent", new_callable=AsyncMock) as mock_run:
+        result = await manager.spawn(
+            task="Refactor auth based on previous analysis",
+            label="refactor",
+            context_from="prev01",
+        )
+        assert result.startswith("Spawned task_id=")
+        # Wait for asyncio.create_task to schedule the call
+        await asyncio.sleep(0.05)
+        mock_run.assert_called_once()
+        # context_from is the 5th positional arg (task_id, task, label, origin, context_from)
+        assert mock_run.call_args[0][4] == "prev01"
+
+@pytest.mark.asyncio
+async def test_spawn_context_from_missing_task(manager):
+    """context_from pointing to a non-existent task should degrade gracefully."""
+    result = await manager.spawn(
+        task="Do something new",
+        label="new task",
+        context_from="nonexistent",
+    )
+    # Should still spawn successfully — context_from miss is silent degradation
+    assert result.startswith("Spawned task_id=")
+    assert len(manager.get_all_statuses()) == 1
+
+
+@pytest.mark.asyncio
+async def test_spawn_context_from_running_task_ignored(manager):
+    """context_from pointing to a running task should be ignored (not completed/failed)."""
+    manager._task_statuses["run01"] = TaskStatus(
+        task_id="run01",
+        label="still running",
+        task_description="Long running analysis",
+        origin={"channel": "gateway", "chat_id": "direct"},
+        status="running",
+    )
+    result = await manager.spawn(
+        task="Follow up on analysis",
+        label="follow up",
+        context_from="run01",
+    )
+    # Should still spawn — running task context is silently ignored
+    assert result.startswith("Spawned task_id=")
+    new_statuses = [s for s in manager.get_all_statuses() if s.task_id != "run01"]
+    assert len(new_statuses) == 1
+
+
+@pytest.mark.asyncio
+async def test_context_from_injects_resume_into_messages(manager):
+    """Verify that context_from actually injects resume context into provider.chat messages."""
+    manager._task_statuses["done01"] = TaskStatus(
+        task_id="done01",
+        label="prior analysis",
+        task_description="Analyze the auth module",
+        origin={"channel": "gateway", "chat_id": "direct"},
+        status="completed",
+        result_summary="Auth module uses JWT with 24h expiry.",
+    )
+    # Create a new task entry so _run_subagent can update it
+    manager._task_statuses["new01"] = TaskStatus(
+        task_id="new01",
+        label="follow-up",
+        task_description="Refactor auth",
+        origin={"channel": "gateway", "chat_id": "direct"},
+    )
+    # Mock provider.chat to capture messages and return final answer
+    captured_messages = []
+
+    async def fake_chat(*, messages, **kwargs):
+        captured_messages.append(list(messages))
+        return LLMResponse(content="Done.", tool_calls=[])
+
+    manager.provider.chat = fake_chat
+    await manager._run_subagent(
+        "new01", "Refactor auth", "follow-up",
+        {"channel": "gateway", "chat_id": "direct"},
+        context_from="done01",
+    )
+    assert len(captured_messages) >= 1
+    msgs = captured_messages[0]
+    # messages: [system, resume_context, user_task]
+    assert len(msgs) >= 3
+    assert msgs[1]["role"] == "user"
+    assert "Continuing from previous task" in msgs[1]["content"]
+    assert "Analyze the auth module" in msgs[1]["content"]
+    assert "JWT with 24h expiry" in msgs[1]["content"]

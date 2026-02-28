@@ -75,3 +75,104 @@ async def test_soft_interrupt_presaves_user_message_when_busy():
             busy.cancel()
             runner.cancel()
             await asyncio.gather(busy, runner, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_interrupt_preserves_tool_order_with_presaved_current_message():
+    loop_bus = MessageBus()
+    provider = MagicMock()
+    provider.get_default_model.return_value = "test-model"
+
+    with tempfile.TemporaryDirectory() as td:
+        from bao.agent.loop import AgentLoop
+
+        ws = pathlib.Path(td)
+        (ws / "PERSONA.md").write_text("# Persona\n", encoding="utf-8")
+        (ws / "INSTRUCTIONS.md").write_text("# Instructions\n", encoding="utf-8")
+
+        loop = AgentLoop(
+            bus=loop_bus,
+            provider=provider,
+            workspace=ws,
+            model="test-model",
+        )
+
+        completed_tool_msgs = [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "read_file", "arguments": "{}"},
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_1",
+                "name": "read_file",
+                "content": "ok",
+            },
+        ]
+
+        async def fake_run_agent_loop(initial_messages, **kwargs):
+            del initial_messages, kwargs
+            return None, [], [], 0, [], True, completed_tool_msgs
+
+        setattr(loop, "_run_agent_loop", fake_run_agent_loop)
+
+        def _search_memory(query: str, limit: int = 5) -> list[str]:
+            del query, limit
+            return []
+
+        def _search_experience(query: str, limit: int = 3) -> list[str]:
+            del query, limit
+            return []
+
+        loop.context.memory.search_memory = _search_memory
+        loop.context.memory.search_experience = _search_experience
+
+        dispatch_key = "telegram:1"
+        current_token = "tok-current"
+        newer_token = "tok-newer"
+        session = loop.sessions.get_or_create(dispatch_key)
+        session.add_message("user", "m2", _pre_saved=True, _pre_saved_token=current_token)
+        session.add_message("user", "m3", _pre_saved=True, _pre_saved_token=newer_token)
+        loop.sessions.save(session)
+
+        msg = InboundMessage(
+            channel="telegram",
+            sender_id="u",
+            chat_id="1",
+            content="m2",
+            metadata={"_pre_saved": True, "_pre_saved_token": current_token},
+        )
+
+        out = await loop._process_message(msg)
+        assert out is None
+
+        updated = loop.sessions.get_or_create(dispatch_key)
+        idx_current = next(
+            i
+            for i, m in enumerate(updated.messages)
+            if m.get("role") == "user" and m.get("_pre_saved_token") == current_token
+        )
+        idx_newer = next(
+            i
+            for i, m in enumerate(updated.messages)
+            if m.get("role") == "user" and m.get("_pre_saved_token") == newer_token
+        )
+        idx_assistant = next(
+            i
+            for i, m in enumerate(updated.messages)
+            if m.get("role") == "assistant" and m.get("tool_calls")
+        )
+        idx_tool = next(
+            i
+            for i, m in enumerate(updated.messages)
+            if m.get("role") == "tool" and m.get("tool_call_id") == "call_1"
+        )
+
+        assert idx_current < idx_assistant < idx_tool < idx_newer

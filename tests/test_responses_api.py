@@ -4,11 +4,11 @@ import asyncio
 import json
 import sys
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from bao.providers.api_mode_cache import _normalize_key, get_cached_mode, set_cached_mode, _load
+from bao.providers.api_mode_cache import get_cached_mode, set_cached_mode
 from bao.providers.responses_compat import (
     convert_messages_to_responses,
     convert_tools_to_responses,

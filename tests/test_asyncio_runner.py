@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import asyncio
-import time
-
-import pytest
+import importlib
 
 from app.backend.asyncio_runner import AsyncioRunner
+
+pytest = importlib.import_module("pytest")
 
 
 @pytest.fixture
@@ -57,5 +57,7 @@ def test_start_idempotent():
 
 def test_submit_before_start_raises():
     r = AsyncioRunner()
+    coro = asyncio.sleep(0)
     with pytest.raises(RuntimeError):
-        r.submit(asyncio.sleep(0))
+        r.submit(coro)
+    coro.close()

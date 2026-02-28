@@ -374,7 +374,7 @@ def test_opencode_tool_rejects_invalid_max_output_chars_type() -> None:
 def test_agent_loop_registers_opencode_tool() -> None:
     with tempfile.TemporaryDirectory() as d:
         provider = _DummyProvider()
-        with patch("bao.agent.loop.shutil.which", return_value="/usr/bin/opencode"):
+        with patch("bao.agent.tools.coding_agent.shutil.which", return_value="/usr/bin/opencode"):
             loop = AgentLoop(
                 bus=MessageBus(),
                 provider=provider,
@@ -382,8 +382,8 @@ def test_agent_loop_registers_opencode_tool() -> None:
                 model="dummy/model",
                 max_iterations=2,
             )
-    assert loop.tools.has("opencode")
-    assert loop.tools.has("opencode_details")
+    assert loop.tools.has("coding_agent")
+    assert loop.tools.has("coding_agent_details")
 
 
 def test_opencode_details_fetch_by_request_id() -> None:

@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import importlib
 import json
-import pytest
-from pathlib import Path
+import sys
 from unittest.mock import patch
 
-from PySide6.QtCore import QCoreApplication
-import sys
+pytest = importlib.import_module("pytest")
+
+QtCore = pytest.importorskip("PySide6.QtCore")
+QCoreApplication = QtCore.QCoreApplication
 
 
 # Ensure a QCoreApplication exists for QObject tests
@@ -16,10 +18,6 @@ import sys
 def qt_app():
     app = QCoreApplication.instance() or QCoreApplication(sys.argv)
     yield app
-
-
-from app.backend.config import ConfigService
-from app.backend.jsonc_patch import _strip_comments
 
 
 MINIMAL_CONFIG = """{
@@ -41,6 +39,8 @@ MINIMAL_CONFIG = """{
 
 
 def test_load_missing_file(tmp_path):
+    from app.backend.config import ConfigService
+
     svc = ConfigService()
     with patch("bao.config.loader.get_config_path", return_value=tmp_path / "missing.jsonc"):
         svc.load()
@@ -48,6 +48,8 @@ def test_load_missing_file(tmp_path):
 
 
 def test_load_valid_config(tmp_path):
+    from app.backend.config import ConfigService
+
     cfg = tmp_path / "config.jsonc"
     cfg.write_text(MINIMAL_CONFIG, encoding="utf-8")
     svc = ConfigService()
@@ -57,6 +59,8 @@ def test_load_valid_config(tmp_path):
 
 
 def test_get_value_after_load(tmp_path):
+    from app.backend.config import ConfigService
+
     cfg = tmp_path / "config.jsonc"
     cfg.write_text(MINIMAL_CONFIG, encoding="utf-8")
     svc = ConfigService()
@@ -68,6 +72,8 @@ def test_get_value_after_load(tmp_path):
 
 
 def test_get_value_slot(tmp_path):
+    from app.backend.config import ConfigService
+
     cfg = tmp_path / "config.jsonc"
     cfg.write_text(MINIMAL_CONFIG, encoding="utf-8")
     svc = ConfigService()
@@ -77,6 +83,9 @@ def test_get_value_slot(tmp_path):
 
 
 def test_save_patches_value(tmp_path):
+    from app.backend.config import ConfigService
+    from app.backend.jsonc_patch import _strip_comments
+
     cfg = tmp_path / "config.jsonc"
     cfg.write_text(MINIMAL_CONFIG, encoding="utf-8")
     svc = ConfigService()
@@ -91,12 +100,16 @@ def test_save_patches_value(tmp_path):
 
 
 def test_save_before_load_fails():
+    from app.backend.config import ConfigService
+
     svc = ConfigService()
     ok = svc.save({"agents.defaults.model": "x"})
     assert ok is False
 
 
 def test_save_channel_enabled_without_token_fails(tmp_path):
+    from app.backend.config import ConfigService
+
     cfg = tmp_path / "config.jsonc"
     cfg.write_text(MINIMAL_CONFIG, encoding="utf-8")
     svc = ConfigService()
@@ -110,6 +123,8 @@ def test_save_channel_enabled_without_token_fails(tmp_path):
 
 
 def test_save_channel_enabled_with_token_succeeds(tmp_path):
+    from app.backend.config import ConfigService
+
     # Config must already have the channels key for patch to work
     config_with_channels = (
         MINIMAL_CONFIG.rstrip("}")
@@ -130,6 +145,9 @@ def test_save_channel_enabled_with_token_succeeds(tmp_path):
 
 
 def test_save_rejects_invalid_bool_value(tmp_path):
+    from app.backend.config import ConfigService
+    from app.backend.jsonc_patch import _strip_comments
+
     config_with_mochat = (
         MINIMAL_CONFIG.rstrip("}")
         + ',\n  "channels": {\n    "mochat": {\n      "enabled": false,\n      "socketDisableMsgpack": false\n    }\n  }\n}'

@@ -263,7 +263,7 @@ def test_agent_loop_registers_claudecode_tools() -> None:
         def _which(binary: str) -> str | None:
             return "/usr/bin/claude" if binary == "claude" else None
 
-        with patch("bao.agent.loop.shutil.which", side_effect=_which):
+        with patch("bao.agent.tools.coding_agent.shutil.which", side_effect=_which):
             loop = AgentLoop(
                 bus=MessageBus(),
                 provider=provider,
@@ -271,5 +271,5 @@ def test_agent_loop_registers_claudecode_tools() -> None:
                 model="dummy/model",
                 max_iterations=2,
             )
-    assert loop.tools.has("claudecode")
-    assert loop.tools.has("claudecode_details")
+    assert loop.tools.has("coding_agent")
+    assert loop.tools.has("coding_agent_details")
