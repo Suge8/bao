@@ -89,8 +89,9 @@ def _extract_interactive_content(content: dict) -> list[str]:
         elif isinstance(title, str):
             parts.append(f"title: {title}")
 
-    for element in content.get("elements", []) if isinstance(content.get("elements"), list) else []:
-        parts.extend(_extract_element_content(element))
+    for elements in content.get("elements", []) if isinstance(content.get("elements"), list) else []:
+        for element in elements:
+            parts.extend(_extract_element_content(element))
 
     card = content.get("card", {})
     if card:
