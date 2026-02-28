@@ -1,0 +1,90 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 200" width="800" height="200">
+  <defs>
+    <linearGradient id="glow" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#6366f1"/>
+      <stop offset="50%" stop-color="#8b5cf6"/>
+      <stop offset="100%" stop-color="#a78bfa"/>
+    </linearGradient>
+    <linearGradient id="line-grad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#6366f1" stop-opacity="0"/>
+      <stop offset="50%" stop-color="#8b5cf6" stop-opacity="0.3"/>
+      <stop offset="100%" stop-color="#a78bfa" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="blur-glow">
+      <feGaussianBlur stdDeviation="8" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <radialGradient id="orb1" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#8b5cf6" stop-opacity="0.15"/>
+      <stop offset="100%" stop-color="#8b5cf6" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="orb2" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#6366f1" stop-opacity="0.1"/>
+      <stop offset="100%" stop-color="#6366f1" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <style>
+    @keyframes breathe {
+      0%, 100% { opacity: 0.7; }
+      50% { opacity: 1; }
+    }
+    @keyframes glow-pulse {
+      0%, 100% { filter: url(#blur-glow); opacity: 0.9; }
+      50% { filter: url(#blur-glow); opacity: 1; }
+    }
+    @keyframes float-orb {
+      0%, 100% { transform: translate(0, 0); }
+      33% { transform: translate(15px, -8px); }
+      66% { transform: translate(-10px, 5px); }
+    }
+    @keyframes float-orb2 {
+      0%, 100% { transform: translate(0, 0); }
+      33% { transform: translate(-12px, 10px); }
+      66% { transform: translate(8px, -6px); }
+    }
+    @keyframes dash-flow {
+      to { stroke-dashoffset: -20; }
+    }
+    .title { animation: glow-pulse 4s ease-in-out infinite; }
+    .subtitle { animation: breathe 5s ease-in-out infinite; }
+    .orb-1 { animation: float-orb 12s ease-in-out infinite; }
+    .orb-2 { animation: float-orb2 15s ease-in-out infinite; }
+    .grid-line { animation: breathe 6s ease-in-out infinite; }
+    .dash-line { animation: dash-flow 2s linear infinite; }
+  </style>
+
+  <rect width="800" height="200" fill="#0d1117" rx="12"/>
+
+  <!-- Grid lines -->
+  <g class="grid-line" opacity="0.06">
+    <line x1="0" y1="50" x2="800" y2="50" stroke="#8b5cf6" stroke-width="0.5"/>
+    <line x1="0" y1="100" x2="800" y2="100" stroke="#8b5cf6" stroke-width="0.5"/>
+    <line x1="0" y1="150" x2="800" y2="150" stroke="#8b5cf6" stroke-width="0.5"/>
+    <line x1="200" y1="0" x2="200" y2="200" stroke="#8b5cf6" stroke-width="0.5"/>
+    <line x1="400" y1="0" x2="400" y2="200" stroke="#8b5cf6" stroke-width="0.5"/>
+    <line x1="600" y1="0" x2="600" y2="200" stroke="#8b5cf6" stroke-width="0.5"/>
+  </g>
+
+  <!-- Floating orbs -->
+  <circle class="orb-1" cx="150" cy="80" r="80" fill="url(#orb1)"/>
+  <circle class="orb-2" cx="650" cy="120" r="100" fill="url(#orb2)"/>
+
+  <!-- Decorative dashed lines -->
+  <line class="dash-line" x1="50" y1="170" x2="300" y2="170" stroke="url(#line-grad)" stroke-width="1" stroke-dasharray="4 6"/>
+  <line class="dash-line" x1="500" y1="30" x2="750" y2="30" stroke="url(#line-grad)" stroke-width="1" stroke-dasharray="4 6"/>
+
+  <!-- Dots -->
+  <circle cx="100" cy="40" r="1.5" fill="#6366f1" opacity="0.4"/>
+  <circle cx="700" cy="160" r="1.5" fill="#a78bfa" opacity="0.3"/>
+  <circle cx="300" cy="30" r="1" fill="#8b5cf6" opacity="0.3"/>
+  <circle cx="550" cy="170" r="1" fill="#6366f1" opacity="0.25"/>
+
+  <!-- Title -->
+  <text class="title" x="400" y="95" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="56" font-weight="700" fill="url(#glow)" letter-spacing="8">bao</text>
+
+  <!-- Subtitle -->
+  <text class="subtitle" x="400" y="140" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="16" fill="#9ca3af" letter-spacing="3" font-weight="300">手机发消息，AI 帮你干活</text>
+</svg>
