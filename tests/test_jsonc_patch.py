@@ -1,9 +1,8 @@
 """Tests for JSONC patch writer."""
-
 from __future__ import annotations
 
 import json
-import pytest
+
 from app.backend.jsonc_patch import patch_jsonc, _strip_comments
 
 
@@ -44,9 +43,7 @@ def test_update_existing_number():
 
 
 def test_update_null_to_string():
-    result, errors = patch_jsonc(
-        SAMPLE_JSONC, {"providers.openai.apiBase": "https://api.example.com"}
-    )
+    result, errors = patch_jsonc(SAMPLE_JSONC, {"providers.openai.apiBase": "https://api.example.com"})
     assert not errors
     data = _parse(result)
     assert data["providers"]["openai"]["apiBase"] == "https://api.example.com"

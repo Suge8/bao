@@ -1,7 +1,7 @@
 """Tests for Layer 2: messages compaction."""
 
-import importlib
 import json
+import importlib
 from pathlib import Path
 from typing import Any
 

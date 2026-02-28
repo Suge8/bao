@@ -138,7 +138,6 @@ class ScriptedProvider(LLMProvider):
         return "scripted-provider"
 
 
-@pytest.mark.asyncio
 def test_context_bytes_est_increases_with_tool_calls(tmp_path: Path, monkeypatch: Any) -> None:
     _install_web_tool_stub(monkeypatch)
     from bao.agent.loop import AgentLoop

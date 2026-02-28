@@ -8,19 +8,18 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from bao.gateway.builder import GatewayStack, build_gateway_stack, send_startup_greeting
+from bao.gateway.builder import GatewayStack, build_gateway_stack
 
 
 class TestImports:
     """Verify the public API is importable."""
 
     def test_imports(self):
-        from bao.gateway.builder import (
-            GatewayStack,
-            build_gateway_stack,
+        from bao.gateway.builder import (  # noqa: F811
+            GatewayStack,  # noqa: F811, F401
+            build_gateway_stack,  # noqa: F811
             send_startup_greeting,
         )
-
         assert callable(build_gateway_stack)
         assert asyncio.iscoroutinefunction(send_startup_greeting)
 
@@ -50,7 +49,6 @@ class TestCronCallbackDefensive:
     @pytest.fixture()
     def stub_job(self):
         from bao.cron.types import CronJob, CronPayload
-
         return CronJob(
             id="test-job",
             name="test",
@@ -73,11 +71,10 @@ class TestCronCallbackDefensive:
         """When agent.process_direct raises, callback returns 'Error: ...' instead of crashing."""
         # We need to extract the on_cron_job closure.
         # Build a minimal mock cron service that captures the callback.
-        captured_callback = None
+        _ = None  # placeholder for callback capture (unused in this test path)
 
         class FakeCron:
             on_job = None
-
             def __init__(self, path):
                 pass
 
@@ -93,12 +90,7 @@ class TestCronCallbackDefensive:
             patch("bao.agent.loop.AgentLoop", return_value=failing_agent),
             patch("bao.bus.queue.MessageBus", return_value=fake_bus),
             patch("bao.channels.manager.ChannelManager", return_value=MagicMock()),
-            patch(
-                "bao.config.loader.get_data_dir",
-                return_value=MagicMock(
-                    __truediv__=lambda s, x: MagicMock(__truediv__=lambda s, x: "/tmp/fake")
-                ),
-            ),
+            patch("bao.config.loader.get_data_dir", return_value=MagicMock(__truediv__=lambda s, x: MagicMock(__truediv__=lambda s, x: "/tmp/fake"))),
             patch("bao.cron.service.CronService", side_effect=FakeCron),
             patch("bao.heartbeat.service.HeartbeatService", return_value=MagicMock()),
             patch("bao.session.manager.SessionManager", return_value=MagicMock()),

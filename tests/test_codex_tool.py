@@ -180,7 +180,7 @@ def test_codex_details_blocks_cross_context_request_id() -> None:
 def test_agent_loop_registers_codex_tools() -> None:
     with tempfile.TemporaryDirectory() as d:
         provider = _DummyProvider()
-        with patch("bao.agent.loop.shutil.which", return_value="/usr/bin/codex"):
+        with patch("bao.agent.tools.coding_agent.shutil.which", return_value="/usr/bin/codex"):
             loop = AgentLoop(
                 bus=MessageBus(),
                 provider=provider,
@@ -188,5 +188,5 @@ def test_agent_loop_registers_codex_tools() -> None:
                 model="dummy/model",
                 max_iterations=2,
             )
-    assert loop.tools.has("codex")
-    assert loop.tools.has("codex_details")
+    assert loop.tools.has("coding_agent")
+    assert loop.tools.has("coding_agent_details")

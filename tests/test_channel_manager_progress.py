@@ -53,6 +53,7 @@ def test_tool_hint_suppressed_keeps_iteration_boundary() -> None:
 
     manager = ChannelManager(cfg, bus)
     dummy = _DummyChannel(bus)
+    setattr(dummy, "_progress", object())
     manager.channels = {"dummy": dummy}
 
     _dispatch_one(
