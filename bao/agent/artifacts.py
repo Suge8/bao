@@ -101,7 +101,7 @@ class ArtifactStore:
         except FileNotFoundError:
             pass
         except Exception as exc:
-            logger.warning(
+            logger.debug(
                 "Failed to cleanup artifact session directory {}: {}", self.session_dir, exc
             )
 
@@ -119,7 +119,7 @@ class ArtifactStore:
                 if now - child.stat().st_mtime > ttl_seconds:
                     shutil.rmtree(child)
             except Exception as exc:
-                logger.warning("Failed to cleanup stale artifact directory {}: {}", child, exc)
+                logger.debug("Failed to cleanup stale artifact directory {}: {}", child, exc)
 
     def _kind_dir(self, kind: str) -> Path:
         return self.session_dir / self._KIND_DIRS.get(kind, "misc")
@@ -178,7 +178,7 @@ def maybe_offload_result(
         ref = store.write_text("tool_output", f"{tool_name}_{tool_call_id}", result)
         return store.format_pointer(ref, preview)
     except Exception as exc:
-        logger.warning("ctx[L1] offload failed for {}: {}", tool_name, exc)
+        logger.debug("ctx[L1] offload failed for {}: {}", tool_name, exc)
         return result
 
 
@@ -218,7 +218,7 @@ def apply_tool_output_budget(
             event.offloaded = True
             event.offloaded_chars = len(result)
         except Exception as exc:
-            logger.warning("ctx[L1] offload failed for {}: {}", tool_name, exc)
+            logger.debug("ctx[L1] offload failed for {}: {}", tool_name, exc)
 
     processed, omitted = hard_clip_tool_result(
         processed, tool_name=tool_name, hard_chars=hard_chars
