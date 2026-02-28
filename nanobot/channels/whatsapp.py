@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from collections import deque
 from typing import Any
 
 from loguru import logger
@@ -15,18 +16,20 @@ from nanobot.config.schema import WhatsAppConfig
 class WhatsAppChannel(BaseChannel):
     """
     WhatsApp channel that connects to a Node.js bridge.
-    
+
     The bridge uses @whiskeysockets/baileys to handle the WhatsApp Web protocol.
     Communication between Python and Node.js is via WebSocket.
     """
-    
+
     name = "whatsapp"
-    
+    MAX_PROCESSED_MESSAGE_IDS = 2000
+
     def __init__(self, config: WhatsAppConfig, bus: MessageBus):
         super().__init__(config, bus)
         self.config: WhatsAppConfig = config
         self._ws = None
         self._connected = False
+        self._processed_message_ids: deque[str] = deque(maxlen=self.MAX_PROCESSED_MESSAGE_IDS)
     
     async def start(self) -> None:
         """Start the WhatsApp channel by connecting to the bridge."""
@@ -105,26 +108,35 @@ class WhatsAppChannel(BaseChannel):
             # Incoming message from WhatsApp
             # Deprecated by whatsapp: old phone number style typically: <phone>@s.whatspp.net
             pn = data.get("pn", "")
-            # New LID sytle typically: 
+            # New LID sytle typically:
             sender = data.get("sender", "")
             content = data.get("content", "")
-            
+            message_id = data.get("id", "")
+
+            # Dedup by message ID to prevent loops
+            if message_id and message_id in self._processed_message_ids:
+                logger.debug("Duplicate message {}, skipping", message_id)
+                return
+
+            if message_id:
+                self._processed_message_ids.append(message_id)
+
             # Extract just the phone number or lid as chat_id
             user_id = pn if pn else sender
             sender_id = user_id.split("@")[0] if "@" in user_id else user_id
             logger.info("Sender {}", sender)
-            
+
             # Handle voice transcription if it's a voice message
             if content == "[Voice Message]":
                 logger.info("Voice message received from {}, but direct download from bridge is not yet supported.", sender_id)
                 content = "[Voice Message: Transcription not available for WhatsApp yet]"
-            
+
             await self._handle_message(
                 sender_id=sender_id,
                 chat_id=sender,  # Use full LID for replies
                 content=content,
                 metadata={
-                    "message_id": data.get("id"),
+                    "message_id": message_id,
                     "timestamp": data.get("timestamp"),
                     "is_group": data.get("isGroup", False)
                 }
