@@ -3,15 +3,16 @@
 Each migration function transforms config data from version N to N+1.
 Functions are pure data transforms — no file IO, no network calls.
 
-Current version: 2
+Current version: 3
   v0 (implicit) → v1: legacy provider keys + tools field renames
   v1 → v2: (reserved for future migrations)
+  v2 → v3: add tools.toolExposure defaults
 """
 
 from collections.abc import Callable
 from typing import Any
 
-CURRENT_VERSION = 2
+CURRENT_VERSION = 3
 
 
 def _migrate_v0_to_v1(data: dict[str, Any]) -> dict[str, Any]:
@@ -39,7 +40,12 @@ def _migrate_v0_to_v1(data: dict[str, Any]) -> dict[str, Any]:
         exec_cfg = {}
     if "restrictToWorkspace" in exec_cfg and "restrictToWorkspace" not in tools:
         tools["restrictToWorkspace"] = exec_cfg.pop("restrictToWorkspace")
-    search = tools.get("web", {}).get("search", {})
+    web_cfg = tools.get("web", {})
+    if not isinstance(web_cfg, dict):
+        web_cfg = {}
+    search = web_cfg.get("search", {})
+    if not isinstance(search, dict):
+        search = {}
     if "apiKey" in search and "braveApiKey" not in search:
         search["braveApiKey"] = search.pop("apiKey")
     if "tavilyKey" in search and "tavilyApiKey" not in search:
@@ -53,10 +59,29 @@ def _migrate_v1_to_v2(data: dict[str, Any]) -> dict[str, Any]:
     return data
 
 
+def _migrate_v2_to_v3(data: dict[str, Any]) -> dict[str, Any]:
+    tools = data.get("tools", {})
+    if not isinstance(tools, dict):
+        return data
+    exposure = tools.get("toolExposure")
+    if not isinstance(exposure, dict):
+        tools["toolExposure"] = {
+            "mode": "off",
+            "bundles": ["core", "web", "desktop", "code"],
+        }
+        return data
+    exposure.setdefault("mode", "off")
+    bundles = exposure.get("bundles")
+    if not isinstance(bundles, list):
+        exposure["bundles"] = ["core", "web", "desktop", "code"]
+    return data
+
+
 # Ordered migration chain: (from_version, to_version, function)
 _MIGRATIONS: list[tuple[int, int, Callable[[dict[str, Any]], dict[str, Any]]]] = [
     (0, 1, _migrate_v0_to_v1),
     (1, 2, _migrate_v1_to_v2),
+    (2, 3, _migrate_v2_to_v3),
 ]
 
 
@@ -87,8 +112,7 @@ def migrate_config(data: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
     for from_v, to_v, fn in _MIGRATIONS:
         if version < to_v:
             data = fn(data)
-            if from_v < CURRENT_VERSION - 1:  # Only warn for non-trivial migrations
-                warnings.append(f"Migrated config v{from_v} → v{to_v}")
+            warnings.append(f"Migrated config v{from_v} → v{to_v}")
 
     data["config_version"] = CURRENT_VERSION
     return data, warnings

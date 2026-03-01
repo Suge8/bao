@@ -17,6 +17,7 @@ SlackModeLiteral = Literal["socket"]
 MochatReplyDelayModeLiteral = Literal["off", "non-mention"]
 ProviderTypeLiteral = Literal["openai", "anthropic", "gemini", "openai_codex"]
 ProviderApiModeLiteral = Literal["auto", "responses", "completions"]
+ToolExposureModeLiteral = Literal["off", "auto"]
 
 
 def _warn_unknown_policy(
@@ -354,6 +355,9 @@ class EmbeddingConfig(Base):
     api_key: SecretStr = SecretStr("")
     base_url: str = ""
     dim: int = 0
+    timeout_seconds: int = 15
+    retry_attempts: int = 2
+    retry_backoff_ms: int = 200
 
     @property
     def enabled(self) -> bool:
@@ -403,6 +407,8 @@ class MCPServerConfig(Base):
     url: str = ""  # HTTP: streamable HTTP endpoint URL
     headers: dict[str, str] = Field(default_factory=dict)  # HTTP: Custom HTTP Headers
     tool_timeout_seconds: int = 30  # Timeout for individual MCP tool calls
+    slim_schema: bool | None = None
+    max_tools: int | None = None
 
 
 class ImageGenerationConfig(Base):
@@ -419,6 +425,21 @@ class DesktopConfig(Base):
     enabled: bool = False  # Disabled by default for safety
 
 
+class ToolExposureConfig(Base):
+    mode: str = "off"
+    bundles: list[str] = Field(default_factory=lambda: ["core", "web", "desktop", "code"])
+
+    @model_validator(mode="after")
+    def _warn_mode(self) -> "ToolExposureConfig":
+        _warn_unknown_policy(
+            model_name="ToolExposureConfig",
+            field_name="mode",
+            value=self.mode,
+            allowed_values=get_args(ToolExposureModeLiteral),
+        )
+        return self
+
+
 class ToolsConfig(Base):
     """Tools configuration."""
 
@@ -431,6 +452,7 @@ class ToolsConfig(Base):
     mcp_slim_schema: bool = True
     image_generation: ImageGenerationConfig = Field(default_factory=ImageGenerationConfig)
     desktop: DesktopConfig = Field(default_factory=DesktopConfig)
+    tool_exposure: ToolExposureConfig = Field(default_factory=ToolExposureConfig)
 
 
 class UIConfig(Base):
@@ -440,7 +462,7 @@ class UIConfig(Base):
 class Config(BaseSettings):
     """Root configuration for bao."""
 
-    config_version: int = Field(default=2, alias="config_version")
+    config_version: int = Field(default=3, alias="config_version")
     agents: AgentsConfig = Field(default_factory=AgentsConfig)
     channels: ChannelsConfig = Field(default_factory=ChannelsConfig)
     providers: dict[str, ProviderConfig] = Field(default_factory=dict)

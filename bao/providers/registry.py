@@ -1,8 +1,8 @@
 """
-Provider Registry — simplified routing for OpenAI-compatible, Anthropic, and Gemini providers.
+Provider Registry — simplified routing for OpenAI-compatible, OpenAI Codex OAuth,
+Anthropic, and Gemini providers.
 
 This replaces the litellm-based provider system with native SDK support.
-No longer needs complex prefix/keyword matching — just 3 provider types.
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ from enum import Enum
 
 
 class ProviderType(Enum):
-    """Provider type enumeration - only 3 types now."""
+    """Provider type enumeration."""
 
     OPENAI = "openai"
     OPENAI_COMPATIBLE = "openai"
@@ -60,7 +60,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
     ProviderSpec(
         name="openai_codex",
         provider_type=ProviderType.OPENAI_CODEX,
-        keywords=("openai-codex", "openai_codex", "codex"),
+        keywords=("openai-codex", "openai_codex"),
         display_name="OpenAI Codex",
     ),
     ProviderSpec(
