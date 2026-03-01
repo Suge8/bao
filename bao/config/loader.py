@@ -66,7 +66,7 @@ _JSONC_TEMPLATE = """\
   //  🔑 LLM Providers — 取消注释以启用 | Uncomment to enable
   //  ⚠️  请至少启用一个 | Enable at least one
   //  名称随意，type 决定 SDK | Name freely, type determines SDK
-  //  type: "openai" | "anthropic" | "gemini"
+  //  type: "openai" | "anthropic" | "gemini" | "openai_codex"
   // ───────────────────────────────────────────────────────────────
   "providers": {
     // ── 示例 | Example ─────────────────────────
@@ -89,9 +89,15 @@ _JSONC_TEMPLATE = """\
     //   "apiKey": "AI...",
     //   "apiBase": ""                  // 留空用官方 | Empty for official API
     // },
+    // ── OpenAI Codex OAuth ────────────────────────────────────────
+    //  通过 ChatGPT 订阅 OAuth 认证，无需 API Key | Auth via ChatGPT subscription, no API Key needed
+    //  需安装 oauth-cli-kit 并完成登录 | Requires oauth-cli-kit login
+    // "openai-codex": {
+    //   "type": "openai_codex"
+    // },
     // ── 添加更多 | Add more ─────────────────────────────────────
     // "your-provider-name": {
-    //   "type": "openai",              // openai | anthropic | gemini
+    //   "type": "openai",              // openai | anthropic | gemini | openai_codex
     //   "apiKey": "",
     //   "apiBase": ""
     // }
@@ -243,12 +249,27 @@ _JSONC_TEMPLATE = """\
     "desktop": {
       "enabled": false
     },
+    // 工具暴露策略 | Tool exposure policy
+    //   mode: off | auto
+    //   bundles: core | web | desktop | code
+    "toolExposure": {
+      "mode": "off",
+      "bundles": ["core", "web", "desktop", "code"]
+    },
     // MCP tool 注册总上限（0 表示不限）| Global cap for registered MCP tools (0 = unlimited)
     "mcpMaxTools": 50,
     // 是否对 MCP schema 做精简（删除冗余元数据）| Slim MCP schema metadata before exposing to LLM
     "mcpSlimSchema": true,
     // MCP 服务器，兼容 Claude Desktop / Cursor｜MCP servers, compatible with Claude Desktop / Cursor
-    "mcpServers": {}
+    // 每个 server 可覆盖全局策略：slimSchema / maxTools
+    "mcpServers": {
+      // "filesystem": {
+      //   "command": "npx",
+      //   "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path"],
+      //   "slimSchema": false,
+      //   "maxTools": 16
+      // }
+    }
   }
 }
 """
@@ -322,7 +343,7 @@ def _apply_env_overlay(data: dict[str, Any]) -> dict[str, Any]:
     for key, value in os.environ.items():
         if not key.startswith(prefix):
             continue
-        parts = key[len(prefix):].lower().split(delimiter.lower())
+        parts = key[len(prefix) :].lower().split(delimiter.lower())
         if not parts or not parts[-1]:
             continue
         # Navigate to parent dict, creating intermediates as needed
@@ -374,8 +395,6 @@ def load_config(config_path: Path | None = None) -> Config:
     raise SystemExit(0)
 
 
-
-
 def _dump_with_secrets(config: Config) -> dict[str, Any]:
     """Dump config to dict with SecretStr values exposed (for file persistence)."""
     from pydantic import BaseModel, SecretStr
@@ -390,11 +409,22 @@ def _dump_with_secrets(config: Config) -> dict[str, Any]:
                 if not isinstance(val, (SecretStr, BaseModel, dict)):
                     continue
                 fi = obj.model_fields[field_name]
-                key = fi.alias or field_name
-                if key not in data and hasattr(obj.model_config, 'get'):
-                    gen = obj.model_config.get('alias_generator')
-                    if gen:
-                        key = gen(field_name)
+                raw_key = fi.alias or field_name
+                key = raw_key if isinstance(raw_key, str) else field_name
+                if key not in data and hasattr(obj.model_config, "get"):
+                    gen = obj.model_config.get("alias_generator")
+                    if callable(gen):
+                        generated = gen(field_name)
+                        if isinstance(generated, str):
+                            key = generated
+                    else:
+                        alias_fn = getattr(gen, "alias", None)
+                        if callable(alias_fn):
+                            generated = alias_fn(field_name)
+                            if isinstance(generated, str):
+                                key = generated
+                if key not in data:
+                    key = field_name
                 if key in data:
                     data[key] = _walk(val)
             return data

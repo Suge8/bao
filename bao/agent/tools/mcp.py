@@ -35,6 +35,38 @@ def _slim_schema(schema: Any, max_description_chars: int = 150) -> Any:
     return schema
 
 
+def _normalize_non_bool_int(value: Any) -> int | None:
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    return None
+
+
+def _resolve_server_slim_schema(server_cfg: Any, default: bool) -> bool:
+    raw_override = getattr(server_cfg, "slim_schema", None)
+    return raw_override if isinstance(raw_override, bool) else default
+
+
+def _resolve_server_max_tools(server_cfg: Any) -> int | None:
+    raw_override = _normalize_non_bool_int(getattr(server_cfg, "max_tools", None))
+    if raw_override is None:
+        return None
+    return max(raw_override, 0)
+
+
+def _reached_global_cap(total_registered: int, pending_count: int, max_tools: int) -> bool:
+    if max_tools <= 0:
+        return False
+    return (total_registered + pending_count) >= max_tools
+
+
+def _reached_server_cap(
+    server_count: int, pending_count: int, server_max_tools: int | None
+) -> bool:
+    if server_max_tools is None or server_max_tools <= 0:
+        return False
+    return (server_count + pending_count) >= server_max_tools
+
+
 def _normalize_name_fragment(value: str, fallback: str) -> str:
     lowered = value.lower()
     chars = [ch if (ch.isalnum() or ch == "_") else "_" for ch in lowered]
@@ -118,17 +150,18 @@ async def connect_mcp_servers(
     from mcp import ClientSession, StdioServerParameters
     from mcp.client.stdio import stdio_client
 
-    tool_limit = max_tools > 0
     total_registered = 0
     connected_servers = 0
 
     for name, cfg in mcp_servers.items():
-        if tool_limit and total_registered >= max_tools:
+        if _reached_global_cap(total_registered, 0, max_tools):
             logger.debug(
                 "🔌 MCP 达到上限 / limit reached: global tool limit ({})",
                 max_tools,
             )
             break
+        server_slim_schema = _resolve_server_slim_schema(cfg, slim_schema)
+        server_max_tools = _resolve_server_max_tools(cfg)
         server_stack = AsyncExitStack()
         await server_stack.__aenter__()
         try:
@@ -183,11 +216,22 @@ async def connect_mcp_servers(
             pending_names: set[str] = set()
             pending_wrappers: list[MCPToolWrapper] = []
             for tool_def in tools.tools:
-                if tool_limit and total_registered >= max_tools:
+                if _reached_global_cap(total_registered, len(pending_wrappers), max_tools):
                     logger.debug(
                         "🔌 MCP 达到上限 / limit reached: ({}) while registering {}",
                         max_tools,
                         name,
+                    )
+                    break
+                if _reached_server_cap(
+                    server_count,
+                    len(pending_wrappers),
+                    server_max_tools,
+                ):
+                    logger.debug(
+                        "🔌 MCP 服务器达到上限 / server limit reached: {} ({} tools)",
+                        name,
+                        server_max_tools,
                     )
                     break
 
@@ -207,7 +251,7 @@ async def connect_mcp_servers(
                     name,
                     tool_def,
                     timeout=tool_timeout,
-                    slim_schema=slim_schema,
+                    slim_schema=server_slim_schema,
                     name_override=wrapper_name,
                 )
                 pending_wrappers.append(wrapper)
@@ -215,6 +259,10 @@ async def connect_mcp_servers(
             registered_names: list[str] = []
             try:
                 for wrapper in pending_wrappers:
+                    if _reached_global_cap(total_registered, 0, max_tools):
+                        break
+                    if _reached_server_cap(server_count, 0, server_max_tools):
+                        break
                     registry.register(wrapper)
                     registered_names.append(wrapper.name)
                     total_registered += 1
@@ -227,10 +275,12 @@ async def connect_mcp_servers(
 
             if server_count > 0:
                 await stack.enter_async_context(server_stack)
+                logger.info("🔌 MCP 已连接 / connected: {} ({} tools)", name, server_count)
             else:
                 await server_stack.aclose()
-
-            logger.info("🔌 MCP 已连接 / connected: {} ({} tools)", name, server_count)
+                logger.debug(
+                    "MCP connected but no tools registered for server '{}': cap or empty list", name
+                )
         except asyncio.CancelledError:
             try:
                 await server_stack.aclose()

@@ -5,7 +5,14 @@ from types import SimpleNamespace
 from typing import Any
 
 from bao.agent.loop import AgentLoop
-from bao.agent.tools.mcp import MCPToolWrapper, _slim_schema
+from bao.agent.tools.mcp import (
+    MCPToolWrapper,
+    _reached_global_cap,
+    _reached_server_cap,
+    _resolve_server_max_tools,
+    _resolve_server_slim_schema,
+    _slim_schema,
+)
 from bao.bus.queue import MessageBus
 from bao.config.schema import Config
 from bao.providers.base import LLMProvider, LLMResponse
@@ -102,6 +109,46 @@ def test_mcp_wrapper_can_disable_slim_schema() -> None:
     assert "default" not in slim_wrapper.parameters["properties"]["q"]
     assert len(slim_wrapper.description) < len(raw_wrapper.description)
     assert raw_wrapper.parameters["properties"]["q"]["default"] == "abc"
+
+
+def test_mcp_server_slim_schema_override_resolution() -> None:
+    cfg_default = SimpleNamespace()
+    cfg_false = SimpleNamespace(slim_schema=False)
+    cfg_true = SimpleNamespace(slim_schema=True)
+    cfg_invalid = SimpleNamespace(slim_schema="false")
+
+    assert _resolve_server_slim_schema(cfg_default, True) is True
+    assert _resolve_server_slim_schema(cfg_false, True) is False
+    assert _resolve_server_slim_schema(cfg_true, False) is True
+    assert _resolve_server_slim_schema(cfg_invalid, True) is True
+
+
+def test_mcp_server_max_tools_override_resolution() -> None:
+    cfg_default = SimpleNamespace()
+    cfg_limit = SimpleNamespace(max_tools=8)
+    cfg_zero = SimpleNamespace(max_tools=0)
+    cfg_negative = SimpleNamespace(max_tools=-3)
+    cfg_bool = SimpleNamespace(max_tools=True)
+    cfg_text = SimpleNamespace(max_tools="8")
+
+    assert _resolve_server_max_tools(cfg_default) is None
+    assert _resolve_server_max_tools(cfg_limit) == 8
+    assert _resolve_server_max_tools(cfg_zero) == 0
+    assert _resolve_server_max_tools(cfg_negative) == 0
+    assert _resolve_server_max_tools(cfg_bool) is None
+    assert _resolve_server_max_tools(cfg_text) is None
+
+
+def test_mcp_cap_helpers() -> None:
+    assert _reached_global_cap(total_registered=0, pending_count=0, max_tools=0) is False
+    assert _reached_global_cap(total_registered=4, pending_count=0, max_tools=5) is False
+    assert _reached_global_cap(total_registered=4, pending_count=1, max_tools=5) is True
+    assert _reached_global_cap(total_registered=5, pending_count=0, max_tools=5) is True
+
+    assert _reached_server_cap(server_count=0, pending_count=0, server_max_tools=None) is False
+    assert _reached_server_cap(server_count=0, pending_count=0, server_max_tools=0) is False
+    assert _reached_server_cap(server_count=1, pending_count=0, server_max_tools=2) is False
+    assert _reached_server_cap(server_count=1, pending_count=1, server_max_tools=2) is True
 
 
 async def test_agentloop_passes_mcp_slim_and_max_tools(monkeypatch: Any, tmp_path: Path) -> None:
