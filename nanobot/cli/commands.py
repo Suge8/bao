@@ -296,54 +296,31 @@ def gateway(
     async def on_cron_job(job: CronJob) -> str | None:
         """Execute a cron job through the agent."""
         from nanobot.agent.tools.message import MessageTool
-        
-        cron_session_key = f"cron:{job.id}"
-        cron_session = agent.sessions.get_or_create(cron_session_key)
-        
         reminder_note = (
-            f"[系统定时任务] ⏰ 计时已结束\n\n"
-            f"定时任务 '{job.name}' 已触发。定时内容：{job.payload.message}\n\n"
+            "[Scheduled Task] Timer finished.\n\n"
+            f"Task '{job.name}' has been triggered.\n"
+            f"Scheduled instruction: {job.payload.message}"
         )
-        
-        cron_session.add_message(role="user", content=reminder_note)
-        agent.sessions.save(cron_session)
-        
-        agent._set_tool_context(
-            job.payload.channel or "cli",
-            job.payload.to or "direct",
-            None
+
+        response = await agent.process_direct(
+            reminder_note,
+            session_key=f"cron:{job.id}",
+            channel=job.payload.channel or "cli",
+            chat_id=job.payload.to or "direct",
         )
-        
+
         message_tool = agent.tools.get("message")
-        if isinstance(message_tool, MessageTool):
-            message_tool.start_turn()
-        
-        history = cron_session.get_history(max_messages=agent.memory_window)
-        
-        messages = [
-            {"role": "system", "content": agent.context.build_system_prompt()},
-            *history,
-            {"role": "user", "content": agent.context._build_runtime_context(
-                job.payload.channel or "cli",
-                job.payload.to or "direct"
-            )},
-        ]
-        
-        final_content, _, all_msgs = await agent._run_agent_loop(messages)
-        agent._save_turn(cron_session, all_msgs, 1 + len(history) + 1)
-        agent.sessions.save(cron_session)
-        
         if isinstance(message_tool, MessageTool) and message_tool._sent_in_turn:
-            return final_content
-        
-        if job.payload.deliver and job.payload.to and final_content:
+            return response
+
+        if job.payload.deliver and job.payload.to and response:
             from nanobot.bus.events import OutboundMessage
             await bus.publish_outbound(OutboundMessage(
                 channel=job.payload.channel or "cli",
                 chat_id=job.payload.to,
-                content=final_content
+                content=response
             ))
-        return final_content
+        return response
     cron.on_job = on_cron_job
 
     # Create channel manager
