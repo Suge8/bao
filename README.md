@@ -141,6 +141,7 @@ Bao 自动检测本机安装的编程 CLI（OpenCode、Codex、Claude Code），
 - **AI 自驱** — 遇到多步骤任务，自动创建计划并逐步更新，无需用户指令
 - **始终可见** — 活跃计划实时注入上下文，AI 每一步都知道自己在哪、下一步做什么
 - **用完即走** — 计划完成后自动归档，不再占用 prompt 预算，干净利落
+- **工具可控** — 内置 `create_plan` / `update_plan_step` / `clear_plan` 三个原子工具，计划状态持久化在 session metadata，并以 `## Current Plan` 注入上下文
 
 不用提醒它"你到哪一步了"。**它比你更清楚。**
 
@@ -327,6 +328,12 @@ uv run pytest tests/ -v
 ```
 
 ```bash
+uv run pytest tests/test_office_validators_wrappers.py -v
+```
+
+用于验证 Office validators 薄适配层与共享实现（`_office_shared`）的导入契约、`schemas_dir` 绑定、同进程多 skill 连续导入不串线。
+
+```bash
 uv run python tests/measure_prompt_size.py
 ```
 
@@ -511,6 +518,7 @@ Complex tasks shouldn't require hand-holding. Bao breaks down the work, tracks e
 - **Self-directed** — Detects multi-step tasks, creates a plan, and updates progress automatically. No user commands needed
 - **Always aware** — The active plan is injected into context in real time. Every step, Bao knows where it is and what's next
 - **Clean exit** — Finished plans archive themselves and stop consuming prompt budget. No stale context, no wasted tokens
+- **Tool-level control** — Built-in atomic tools `create_plan` / `update_plan_step` / `clear_plan` persist plan state in session metadata and inject `## Current Plan` into context
 
 You'll never have to ask "where were you again?" **It already knows.**
 
@@ -695,6 +703,12 @@ New messages in the same session use cooperative soft interruption by default (s
 ```bash
 uv run pytest tests/ -v
 ```
+
+```bash
+uv run pytest tests/test_office_validators_wrappers.py -v
+```
+
+Use this to verify Office validators wrapper/import contracts after shared implementation changes (`_office_shared`): import routing, per-skill `schemas_dir` binding, and no cross-skill pollution in single-process sequential imports.
 
 ```bash
 uv run python tests/measure_prompt_size.py
