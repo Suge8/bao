@@ -167,9 +167,38 @@ Bao 自动检测本机安装的编程 CLI（OpenCode、Codex、Claude Code），
 
 ## 🚀 快速开始
 
+三种方式，任选一种。目标只有一个：**尽快把 `bao` 跑起来**。
+
+### 方式 1：一键安装（推荐）
+
+无需手动装 Python/uv，脚本会自动检查并补齐依赖，然后安装 Bao。
+
 ```bash
-pip install bao-ai
+# macOS
+curl -fsSL https://raw.githubusercontent.com/Suge8/Bao/main/install/install.sh | bash
+
+# Windows PowerShell
+powershell -ExecutionPolicy Bypass -NoProfile -Command "irm https://raw.githubusercontent.com/Suge8/Bao/main/install/install.ps1 | iex"
+```
+
+### 方式 2：已有前置依赖，直接 PyPI 安装
+
+如果你已经有 Python 3.11+，这一条命令就够了。
+
+```bash
+python -m pip install -U bao-ai
 bao
+```
+
+### 方式 3：源码安装（开发者）
+
+适合要调试、改代码或参与贡献的同学。
+
+```bash
+git clone https://github.com/Suge8/Bao.git
+cd Bao
+uv sync
+uv run bao
 ```
 
 首次运行自动生成配置文件（含 `config_version`，后续迁移可稳定收敛）。在 `~/.bao/config.jsonc` 中设置你的 API Key：
@@ -190,7 +219,7 @@ bao
 bao
 ```
 
-**就这样。2 分钟，一个完整的 AI 助手。**
+**就这样。真正的一键可用，2 分钟就能开始。**
 
 可选：配置一个**效用模型**用于后台任务（经验提取、记忆整合、会话标题生成），节省开销：
 
@@ -544,9 +573,38 @@ You'll never have to ask "where were you again?" **It already knows.**
 
 ### 🚀 Quick Start
 
+Three paths, same result: **get `bao` running fast**.
+
+#### Method 1: One-click install (Recommended)
+
+No manual Python/uv setup. The script checks and installs everything for you.
+
 ```bash
-pip install bao-ai
+# macOS
+curl -fsSL https://raw.githubusercontent.com/Suge8/Bao/main/install/install.sh | bash
+
+# Windows PowerShell
+powershell -ExecutionPolicy Bypass -NoProfile -Command "irm https://raw.githubusercontent.com/Suge8/Bao/main/install/install.ps1 | iex"
+```
+
+#### Method 2: PyPI install (if prerequisites are ready)
+
+If Python 3.11+ is already installed, this is the fastest route.
+
+```bash
+python -m pip install -U bao-ai
 bao
+```
+
+#### Method 3: Install from source (for developers)
+
+Best for local development, debugging, or contribution workflows.
+
+```bash
+git clone https://github.com/Suge8/Bao.git
+cd Bao
+uv sync
+uv run bao
 ```
 
 First run auto-generates a config file (with `config_version` for stable migration behavior). Set your API key in `~/.bao/config.jsonc`:
@@ -567,7 +625,7 @@ Run again:
 bao
 ```
 
-**That's it. 2 minutes to a working AI assistant.**
+**That is it. A true one-click path and a full setup in minutes.**
 
 Optional: configure a **Utility Model** for background tasks (experience extraction, memory consolidation, session title generation) to save costs:
 

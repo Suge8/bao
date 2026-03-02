@@ -122,7 +122,7 @@ npm audit
 npm audit fix
 
 # 更新到最新安全版本
-pip install --upgrade bao-ai
+python -m pip install -U bao-ai
 ```
 
 `ws` 已更新至 `>=8.17.1` 修复 DoS 漏洞
@@ -135,7 +135,7 @@ pip install --upgrade bao-ai
 ```bash
 # 容器化运行
 docker run --rm -it python:3.11
-pip install bao-ai
+python -m pip install bao-ai
 ```
 
 ### 专用用户
