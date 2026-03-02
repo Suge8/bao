@@ -4,7 +4,7 @@
 ; ──────────────────────────────────────────────────────────────
 
 #define MyAppName "Bao"
-#define MyAppVersion "0.1.0"
+#define MyAppVersion "0.3.0"
 #define MyAppPublisher "Bao Contributors"
 #define MyAppURL "https://github.com/bao-project/Bao"
 #define MyAppExeName "Bao.exe"
