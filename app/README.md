@@ -63,6 +63,8 @@ iscc app\scripts\bao_installer.iss
 
 推送 `v*` tag 自动触发 GitHub Actions 构建双平台安装包。
 
+版本记录从 `0.1.0` 开始维护，详见 [`../CHANGELOG.md`](../CHANGELOG.md)。
+
 完整打包指南见 [`docs/desktop-packaging.md`](../docs/desktop-packaging.md)。
 
 > 开发细节（架构、测试命令、UI 坑点、技术要点）见 `AGENTS.md`。

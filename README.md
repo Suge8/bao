@@ -196,6 +196,10 @@ bao
 }
 ```
 
+## 📝 Changelog
+
+版本记录从 `0.1.0` 开始维护，详见 [`CHANGELOG.md`](CHANGELOG.md)。
+
 ## 💬 9 大聊天平台
 
 一份配置，一条命令：`bao`
@@ -532,6 +536,10 @@ Optional: configure a **Utility Model** for background tasks (experience extract
   }
 }
 ```
+
+### 📝 Changelog
+
+Version history is maintained from `0.1.0`; see [`CHANGELOG.md`](CHANGELOG.md).
 
 ### 💬 9 Chat Platforms
 
