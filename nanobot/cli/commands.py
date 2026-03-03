@@ -306,8 +306,9 @@ def gateway(
 
         # Prevent the agent from scheduling new cron jobs during execution
         cron_tool = agent.tools.get("cron")
+        cron_token = None
         if isinstance(cron_tool, CronTool):
-            cron_tool.set_cron_context(True)
+            cron_token = cron_tool.set_cron_context(True)
         try:
             response = await agent.process_direct(
                 reminder_note,
@@ -316,8 +317,8 @@ def gateway(
                 chat_id=job.payload.to or "direct",
             )
         finally:
-            if isinstance(cron_tool, CronTool):
-                cron_tool.set_cron_context(False)
+            if isinstance(cron_tool, CronTool) and cron_token is not None:
+                cron_tool.reset_cron_context(cron_token)
 
         message_tool = agent.tools.get("message")
         if isinstance(message_tool, MessageTool) and message_tool._sent_in_turn:
