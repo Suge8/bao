@@ -15,12 +15,17 @@ import queue
 import threading
 from typing import Any
 
+import os
+from loguru import logger
+
 from PySide6.QtCore import Property, QObject, QTimer, Signal, Slot
 
 from app.backend.asyncio_runner import AsyncioRunner
 from app.backend.chat import ChatMessageModel
 
 
+
+_DEBUG_SWITCH = os.getenv("BAO_DESKTOP_DEBUG_SWITCH") == "1"
 class ChatService(QObject):
     stateChanged = Signal(str)
     errorChanged = Signal(str)
@@ -188,6 +193,8 @@ class ChatService(QObject):
         self, key: str, seq: int
     ) -> tuple[str, int, tuple[int, str], list[dict[str, Any]]]:
         """Load session message history from SessionManager (runs on asyncio thread)."""
+        if _DEBUG_SWITCH:
+            logger.debug(f"switch_request desired={key} current={self._session_key}")
         session = self._session_manager.get_or_create(key)
         raw_messages: Any
         try:
@@ -229,6 +236,8 @@ class ChatService(QObject):
             loaded_key, loaded_messages = messages
             loaded_messages = loaded_messages or []
         if loaded_seq and loaded_seq != self._history_latest_seq:
+            if _DEBUG_SWITCH:
+                logger.debug(f"history_gating loaded_seq={loaded_seq} latest={self._history_latest_seq}")
             return
         if loaded_key != self._session_key:
             return
