@@ -521,24 +521,30 @@ class ChatService(QObject):
 
     def _handle_progress_update(self, row: int, content: str) -> None:
         """Runs on Qt main thread. Routes streaming content to active bubble."""
+        should_render_in_ui = self._active_streaming_session_key in (
+            None,
+            self._committed_session_key,
+        )
         if row == -2:
             self._pending_split = True
             return
         if row == -1 and self._pending_split:
             if self._active_has_content:
                 cur = self._active_streaming_row
-                if cur >= 0:
+                if cur >= 0 and should_render_in_ui:
                     self._model.set_status(cur, "done")
-                new_row = self._model.append_assistant("", status="typing")
-                self._active_streaming_row = new_row
+                if should_render_in_ui:
+                    new_row = self._model.append_assistant("", status="typing")
+                    self._active_streaming_row = new_row
+                    self.messageAppended.emit(new_row)
+                else:
+                    self._active_streaming_row = -1
                 self._active_has_content = False
-                self.messageAppended.emit(new_row)
             self._pending_split = False
         target = self._active_streaming_row if row == -1 else row
-        if target >= 0:
+        if target >= 0 and should_render_in_ui:
             self._model.update_content(target, content)
-            self._active_has_content = bool(content)
-
+        self._active_has_content = bool(content)
     def _handle_tool_hint_update(self, _hint: str) -> None:
         if self._active_streaming_row < 0:
             return
@@ -546,13 +552,20 @@ class ChatService(QObject):
             return
         if self._pending_split:
             return
+        should_render_in_ui = self._active_streaming_session_key in (
+            None,
+            self._committed_session_key,
+        )
         current_row = self._active_streaming_row
-        self._model.set_status(current_row, "done")
-        new_row = self._model.append_assistant("", status="typing")
-        self._active_streaming_row = new_row
+        if should_render_in_ui:
+            self._model.set_status(current_row, "done")
+            new_row = self._model.append_assistant("", status="typing")
+            self._active_streaming_row = new_row
+            self.messageAppended.emit(new_row)
+        else:
+            self._active_streaming_row = -1
         self._active_has_content = False
         self._pending_split = False
-        self.messageAppended.emit(new_row)
 
     def _handle_system_response(self, content: str, session_key: str = "") -> None:
         """Runs on Qt main thread. Queue if streaming, else show immediately."""
