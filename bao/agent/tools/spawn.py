@@ -1,9 +1,16 @@
 """Spawn tool for creating background subagents."""
 
+import asyncio
+import re
+from collections.abc import Awaitable, Callable
 from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any
 
+from loguru import logger
+
+from bao.agent import plan
 from bao.agent.tools.base import Tool
+from bao.bus.events import OutboundMessage
 
 if TYPE_CHECKING:
     from bao.agent.subagent import SubagentManager
@@ -19,19 +26,94 @@ class SpawnTool(Tool):
 
     def __init__(self, manager: "SubagentManager"):
         self._manager = manager
+        self._publish_outbound: Callable[[OutboundMessage], Awaitable[None]] | None = None
         self._origin_channel: ContextVar[str] = ContextVar(
             "spawn_origin_channel", default="gateway"
         )
         self._origin_chat_id: ContextVar[str] = ContextVar("spawn_origin_chat_id", default="direct")
+        self._lang: ContextVar[str] = ContextVar("spawn_lang", default="en")
+        self._reply_metadata: ContextVar[dict[str, Any]] = ContextVar(
+            "spawn_reply_metadata", default={}
+        )
         self._session_key: ContextVar[str] = ContextVar(
             "spawn_session_key", default="gateway:direct"
         )
 
-    def set_context(self, channel: str, chat_id: str, session_key: str | None = None) -> None:
+    def set_publish_outbound(
+        self, publish_outbound: Callable[[OutboundMessage], Awaitable[None]] | None
+    ) -> None:
+        self._publish_outbound = publish_outbound
+
+    def set_context(
+        self,
+        channel: str,
+        chat_id: str,
+        session_key: str | None = None,
+        lang: str | None = None,
+        reply_metadata: dict[str, Any] | None = None,
+    ) -> None:
         """Set the origin context for subagent announcements."""
         self._origin_channel.set(channel)
         self._origin_chat_id.set(chat_id)
+        self._lang.set(plan.normalize_language(lang))
+        self._reply_metadata.set(self._normalize_reply_metadata(reply_metadata))
         self._session_key.set(session_key or f"{channel}:{chat_id}")
+
+    @staticmethod
+    def _normalize_reply_metadata(reply_metadata: dict[str, Any] | None) -> dict[str, Any]:
+        if not isinstance(reply_metadata, dict):
+            return {}
+        slack_meta = reply_metadata.get("slack")
+        if not isinstance(slack_meta, dict):
+            return {}
+        thread_ts = slack_meta.get("thread_ts")
+        if not isinstance(thread_ts, str) or not thread_ts.strip():
+            return {}
+        normalized_slack: dict[str, Any] = {"thread_ts": thread_ts}
+        channel_type = slack_meta.get("channel_type")
+        if isinstance(channel_type, str) and channel_type.strip():
+            normalized_slack["channel_type"] = channel_type
+        return {"slack": normalized_slack}
+
+    def _spawn_notice_text(self) -> str:
+        if plan.normalize_language(self._lang.get()) == "zh":
+            return "已委派子代理处理中，完成后我会同步结果。"
+        return "I've delegated this to a subagent and will share the result once it's done."
+
+    @staticmethod
+    def _extract_task_id(result: str) -> str | None:
+        result_text = str(result or "").strip()
+        if not result_text.lower().startswith("spawned"):
+            return None
+        match = re.search(r"\btask_id=([A-Za-z0-9_-]+)\b", result_text)
+        if not match:
+            return None
+        return match.group(1)
+
+    async def _notify_spawn_started(self, result: str) -> None:
+        if not self._publish_outbound:
+            return
+        task_id = self._extract_task_id(result)
+        if not task_id:
+            return
+
+        metadata = dict(self._reply_metadata.get() or {})
+        metadata.update(
+            {
+                "_subagent_spawned": True,
+                "session_key": self._session_key.get(),
+                "task_id": task_id,
+            }
+        )
+
+        await self._publish_outbound(
+            OutboundMessage(
+                channel=self._origin_channel.get(),
+                chat_id=self._origin_chat_id.get(),
+                content=self._spawn_notice_text(),
+                metadata=metadata,
+            )
+        )
 
     @property
     def name(self) -> str:
@@ -39,9 +121,7 @@ class SpawnTool(Tool):
 
     @property
     def description(self) -> str:
-        return (
-            "Delegate a task to a background subagent. Returns task_id for tracking."
-        )
+        return "Delegate a task to a background subagent. Returns task_id for tracking."
 
     @property
     def parameters(self) -> dict[str, Any]:
@@ -73,7 +153,7 @@ class SpawnTool(Tool):
             return "Spawn failed: task text is required"
         if label is not None and not isinstance(label, str):
             return "Spawn failed: label must be a string"
-        return await self._manager.spawn(
+        result = await self._manager.spawn(
             task=task,
             label=label,
             origin_channel=self._origin_channel.get(),
@@ -81,3 +161,10 @@ class SpawnTool(Tool):
             session_key=self._session_key.get(),
             context_from=context_from if isinstance(context_from, str) else None,
         )
+        try:
+            await self._notify_spawn_started(result)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.debug("Spawn notify failed (non-fatal): {}", exc)
+        return result

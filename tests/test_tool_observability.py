@@ -172,3 +172,98 @@ def test_process_message_persists_tool_observability_in_session_metadata(tmp_pat
     assert isinstance(recent_entries, list)
     assert len(recent_entries) == 1
     assert last_entry["schema_tool_count_last"] > 0
+
+
+def test_process_message_localizes_empty_final_fallback(tmp_path: Path) -> None:
+    (tmp_path / "INSTRUCTIONS.md").write_text("ready", encoding="utf-8")
+    (tmp_path / "PERSONA.md").write_text("ready", encoding="utf-8")
+
+    provider = ToolObservabilityProvider(with_tool_calls=False)
+    loop = AgentLoop(
+        bus=MessageBus(),
+        provider=provider,
+        workspace=tmp_path,
+        max_iterations=2,
+    )
+
+    async def _fake_run_agent_loop(initial_messages: list[dict[str, Any]], **kwargs: Any):
+        del initial_messages, kwargs
+        return None, [], [], 0, [], False, False, []
+
+    setattr(loop, "_run_agent_loop", _fake_run_agent_loop)
+
+    msg = InboundMessage(
+        channel="imessage",
+        sender_id="u1",
+        chat_id="c1",
+        content="帮我处理一下",
+    )
+
+    out = asyncio.run(loop._process_message(msg))
+    assert out is not None
+    assert out.content == "处理完成。"
+
+
+def test_process_message_localizes_blank_final_fallback(tmp_path: Path) -> None:
+    (tmp_path / "INSTRUCTIONS.md").write_text("ready", encoding="utf-8")
+    (tmp_path / "PERSONA.md").write_text("ready", encoding="utf-8")
+
+    provider = ToolObservabilityProvider(with_tool_calls=False)
+    loop = AgentLoop(
+        bus=MessageBus(),
+        provider=provider,
+        workspace=tmp_path,
+        max_iterations=2,
+    )
+
+    async def _fake_run_agent_loop(initial_messages: list[dict[str, Any]], **kwargs: Any):
+        del initial_messages, kwargs
+        return "   ", [], [], 0, [], False, False, []
+
+    setattr(loop, "_run_agent_loop", _fake_run_agent_loop)
+
+    msg = InboundMessage(
+        channel="imessage",
+        sender_id="u1",
+        chat_id="c1",
+        content="帮我处理一下",
+    )
+
+    out = asyncio.run(loop._process_message(msg))
+    assert out is not None
+    assert out.content == "处理完成。"
+
+
+def test_process_system_message_localizes_blank_final_fallback(tmp_path: Path) -> None:
+    (tmp_path / "INSTRUCTIONS.md").write_text("ready", encoding="utf-8")
+    (tmp_path / "PERSONA.md").write_text("ready", encoding="utf-8")
+
+    provider = ToolObservabilityProvider(with_tool_calls=False)
+    loop = AgentLoop(
+        bus=MessageBus(),
+        provider=provider,
+        workspace=tmp_path,
+        max_iterations=2,
+    )
+
+    session = loop.sessions.get_or_create("imessage:+86100")
+    session.metadata["_session_lang"] = "zh"
+    loop.sessions.save(session)
+
+    async def _fake_run_agent_loop(initial_messages: list[dict[str, Any]], **kwargs: Any):
+        del initial_messages, kwargs
+        return "", [], [], 0, [], False, False, []
+
+    setattr(loop, "_run_agent_loop", _fake_run_agent_loop)
+
+    msg = InboundMessage(
+        channel="system",
+        sender_id="subagent",
+        chat_id="imessage:+86100",
+        content="done",
+        metadata={"session_key": "imessage:+86100"},
+    )
+
+    out = asyncio.run(loop._process_system_message(msg))
+    assert out is not None
+    assert out.content == "后台任务已完成。"
