@@ -502,7 +502,9 @@ class AgentLoop:
             "  SKIP: single-step simple requests — just execute directly.\n"
             "  Keep steps short and tool-agnostic. If you started without a plan but realize the task is complex, pause and create_plan immediately."
         )
-        self.tools.register(SpawnTool(manager=self.subagents))
+        spawn_tool = SpawnTool(manager=self.subagents)
+        spawn_tool.set_publish_outbound(self.bus.publish_outbound)
+        self.tools.register(spawn_tool)
         self.tools.register(CheckTasksTool(manager=self.subagents))
         self.tools.register(CancelTaskTool(manager=self.subagents))
         self.tools.register(CheckTasksJsonTool(manager=self.subagents))
@@ -600,18 +602,30 @@ class AgentLoop:
             normalized_message_id = str(message_id)
         else:
             normalized_message_id = None
-        if (t := self.tools.get("message")) and isinstance(t, MessageTool):
-            t.set_context(channel, chat_id, normalized_message_id)
-        if (t := self.tools.get("spawn")) and isinstance(t, SpawnTool):
-            t.set_context(channel, chat_id, session_key=session_key)
-        if (t := self.tools.get("cron")) and isinstance(t, CronTool):
-            t.set_context(channel, chat_id)
 
         preferred_lang = (
             plan_state.normalize_language(lang)
             if isinstance(lang, str)
             else self._resolve_user_language()
         )
+
+        if (t := self.tools.get("message")) and isinstance(t, MessageTool):
+            t.set_context(
+                channel,
+                chat_id,
+                normalized_message_id,
+                reply_metadata=self._plan_reply_metadata(metadata),
+            )
+        if (t := self.tools.get("spawn")) and isinstance(t, SpawnTool):
+            t.set_context(
+                channel,
+                chat_id,
+                session_key=session_key,
+                lang=preferred_lang,
+                reply_metadata=self._plan_reply_metadata(metadata),
+            )
+        if (t := self.tools.get("cron")) and isinstance(t, CronTool):
+            t.set_context(channel, chat_id)
 
         for name in ("create_plan", "update_plan_step", "clear_plan"):
             t = self.tools.get(name)
@@ -2536,8 +2550,8 @@ class AgentLoop:
 
         final_content = parsed_result.final_content
 
-        if final_content is None:
-            final_content = "I've completed processing but have no response to give."
+        if not isinstance(final_content, str) or not final_content.strip():
+            final_content = "处理完成。" if session_lang != "en" else "Completed."
 
         skip_persist_assistant = parsed_result.provider_error
 
@@ -2641,8 +2655,10 @@ class AgentLoop:
         else:
             raise ValueError(f"Unexpected _run_agent_loop result length: {len(result_parts)}")
 
-        if final_content is None:
-            final_content = "Background task completed."
+        if not isinstance(final_content, str) or not final_content.strip():
+            final_content = (
+                "后台任务已完成。" if session_lang != "en" else "Background task completed."
+            )
 
         skip_persist_assistant = provider_error
 
