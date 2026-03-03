@@ -480,6 +480,8 @@ class AgentLoop:
                             filtered.append({"type": "text", "text": "[image]"})
                         else:
                             filtered.append(c)
+                    if not filtered:
+                        continue
                     entry["content"] = filtered
             entry.setdefault("timestamp", datetime.now().isoformat())
             session.messages.append(entry)
