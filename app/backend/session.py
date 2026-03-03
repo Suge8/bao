@@ -9,6 +9,9 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
+import os
+from loguru import logger
+
 from PySide6.QtCore import (
     Property,
     QAbstractListModel,
@@ -21,6 +24,8 @@ from PySide6.QtCore import (
 )
 
 from app.backend.asyncio_runner import AsyncioRunner
+
+_DEBUG_SWITCH = os.getenv("BAO_DESKTOP_DEBUG_SWITCH") == "1"
 
 
 class SessionListModel(QAbstractListModel):
@@ -155,6 +160,8 @@ class SessionService(QObject):
 
     @Slot(str)
     def selectSession(self, key: str) -> None:
+        if _DEBUG_SWITCH:
+            logger.debug(f"session_select_request key={key}")
         if not key:
             return
         # Mark old + new session as read (fire-and-forget)
@@ -169,6 +176,8 @@ class SessionService(QObject):
             self._allow_active_selection = True
             self._active_key = key
             self._model.set_active(key)
+            if _DEBUG_SWITCH:
+                logger.debug(f"session_select_commit key={key}")
             self.activeKeyChanged.emit(key)
         fut = self._runner.submit(self._select_session(key))
         fut.add_done_callback(self._on_select_done)
