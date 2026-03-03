@@ -318,7 +318,7 @@ Model Context Protocol — 接入任何工具生态。配置兼容 **Claude Desk
 }
 ```
 
-`toolExposure.mode` 默认 `auto`（智能路由：按需打分曝光 top-K 工具 + 自动扩容回退至全量，用户无需配置）；也可设为 `off`（全量暴露所有工具）。`toolExposure.bundles` 支持 `core/web/desktop/code` 开关。
+`toolExposure.mode` 默认 `auto`（智能路由：按需打分曝光 top-K 工具 + 自动扩容回退至全量，用户无需配置）；也可设为 `off`（全量暴露所有工具）。`toolExposure.bundles` 支持 `core/web/desktop/code` 开关。当前 `exec` 归入 `core/rescue`，并在执行层做同轮 allowlist 校验；`force_final_response` 阶段会强制 `tools=[]` 且禁止执行任何工具。
 `mcpMaxTools` 用于限制 MCP 工具总注册数（`0` 表示不限制）；`mcpSlimSchema` 用于精简 MCP schema 的冗余元数据，减少 token 占用。`mcpServers.<name>.slimSchema/maxTools` 可按 server 覆盖全局策略。
 
 默认会记录每轮 tools schema 的体积与质量代理指标到 debug 日志和 session metadata（含 post-error 调用代理，不注入 LLM 上下文，不额外消耗 prompt token）；软中断工具调用会单独计入 `interrupted_tool_calls`，并从 `tool_calls_ok` / `tool_calls_error` 中排除，避免质量指标失真。
@@ -735,7 +735,7 @@ Model Context Protocol — plug into any tool ecosystem. Config format is **comp
 }
 ```
 
-`toolExposure.mode` defaults to `auto` (smart routing: scores and exposes only the most relevant tools per turn, with automatic escalation fallback to full exposure — no user configuration needed). Set to `off` to expose all tools unconditionally. `toolExposure.bundles` supports `core/web/desktop/code` switches.
+`toolExposure.mode` defaults to `auto` (smart routing: scores and exposes only the most relevant tools per turn, with automatic escalation fallback to full exposure — no user configuration needed). Set to `off` to expose all tools unconditionally. `toolExposure.bundles` supports `core/web/desktop/code` switches. `exec` is currently part of `core/rescue`, and execution enforces the same per-turn allowlist; during `force_final_response`, `tools=[]` and tool execution is blocked.
 `mcpMaxTools` caps the total number of MCP tools registered (`0` = unlimited). `mcpSlimSchema` strips redundant schema metadata to reduce token usage. `mcpServers.<name>.slimSchema/maxTools` can override global behavior per server.
 
 By default, per-turn tool schema size and quality proxy metrics are recorded in debug logs and session metadata (including a post-error-call proxy; not injected into LLM context, so no prompt token overhead). Soft-interrupted tool calls are tracked in `interrupted_tool_calls` and excluded from both `tool_calls_ok` and `tool_calls_error` so quality metrics are not skewed.
