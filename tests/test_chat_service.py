@@ -506,3 +506,23 @@ def test_handle_history_result_does_not_reset_when_only_entrance_differs():
     svc._handle_history_result(True, "", ("desktop:local", 1, sig, prepared))
 
     assert resets == []
+
+
+def test_progress_update_does_not_mutate_model_when_session_mismatch():
+    svc, model = make_service()
+    svc._session_key = "desktop:old"
+    svc._desired_session_key = "desktop:old"
+    svc._committed_session_key = "desktop:old"
+    row = model.append_assistant("", status="typing")
+    svc._active_streaming_row = row
+    svc._active_streaming_session_key = "desktop:old"
+    svc._processing = True
+
+    svc.setSessionKey("desktop:new")
+    assert model.rowCount() == 0
+
+    svc._handle_progress_update(-1, "streaming content")
+
+    assert model.rowCount() == 0
+    assert svc._active_has_content is True
+    assert svc._committed_session_key == "desktop:new"
