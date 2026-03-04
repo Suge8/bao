@@ -160,10 +160,10 @@ Rectangle {
                 }
 
                 function onMessageAppended(_row) {
-                    if (messageList.historyLoading || messageList.userInteracting) return
-                    if (messageList.count <= 0) return
                     messageList.autoFollow = true
-                    messageList.applyScrollToEnd(false)
+                    if (messageList.count > 0 && !messageList.userInteracting) {
+                        messageList.applyScrollToEnd(false)
+                    }
                 }
             }
 
