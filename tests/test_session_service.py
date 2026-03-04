@@ -337,6 +337,29 @@ def test_service_select_session_updates_active_key():
         runner.shutdown(grace_s=1.0)
 
 
+def test_list_refresh_does_not_override_pending_selection():
+    runner = AsyncioRunner()
+    runner.start()
+    try:
+        svc = _new_session_service(runner)
+        svc.setGatewayReady()
+
+        sessions = [
+            {"key": "desktop:local::s1", "title": "Chat 1", "updated_at": 1, "channel": "desktop"},
+            {"key": "desktop:local::s2", "title": "Chat 2", "updated_at": 2, "channel": "desktop"},
+        ]
+        svc._active_key = "desktop:local::s1"
+        svc._pending_select_key = "desktop:local::s2"
+
+        svc._handle_list_result(True, "", (sessions, "desktop:local::s1", set()))
+
+        assert svc.activeKey == "desktop:local::s2"
+        idx = _sessions_model(svc).index(1)
+        assert _sessions_model(svc).data(idx, Qt.UserRole + 3) is True
+    finally:
+        runner.shutdown(grace_s=1.0)
+
+
 def test_service_delete_session_updates_model():
     runner = AsyncioRunner()
     runner.start()

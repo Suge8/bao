@@ -427,6 +427,8 @@ class SessionService(QObject):
             self.errorOccurred.emit(error)
             return
         sessions, active, unread_keys = data
+        if self._pending_select_key is not None:
+            active = self._pending_select_key
         pending_keys = set(self._pending_deletes.keys())
         if pending_keys:
             sessions = [s for s in sessions if s.get("key") not in pending_keys]
@@ -449,7 +451,10 @@ class SessionService(QObject):
         if active:
             unread_keys.discard(active)
         # Merge with current state: keep cleared keys cleared, add new unreads
-        current_cleared = set(self._model._sessions[i]["key"] for i in range(len(self._model._sessions))) - self._model._unread_keys
+        current_cleared = (
+            set(self._model._sessions[i]["key"] for i in range(len(self._model._sessions)))
+            - self._model._unread_keys
+        )
         unread_keys -= current_cleared
         # Fingerprint check — skip rebuild if nothing changed
         fp = (
