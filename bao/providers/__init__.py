@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING
 from urllib.parse import SplitResult, urlsplit, urlunsplit
 
 from bao.providers.base import LLMProvider, LLMResponse
-from bao.providers.registry import find_by_model
 
 if TYPE_CHECKING:
     from bao.config.schema import Config
@@ -92,11 +91,18 @@ def _normalize_openai_api_base(api_base: str | None, default_api_base: str | Non
 
 
 def _normalize_anthropic_api_base(api_base: str | None) -> str:
-    return _normalize_provider_api_base(
-        api_base,
-        "https://api.anthropic.com/v1/messages",
-        endpoint_suffixes=(("messages",),),
+    explicit = (api_base or "").strip().rstrip("/")
+    if not explicit:
+        return "https://api.anthropic.com"
+
+    split = urlsplit(explicit)
+    segments = _trim_suffix_segments(
+        _split_path_segments(split.path),
+        (("v1", "messages"), ("messages",), ("v1",)),
     )
+    normalized_path = "/" + "/".join(segments) if segments else ""
+    normalized = split._replace(path=normalized_path, query="", fragment="")
+    return urlunsplit(normalized).rstrip("/") or explicit
 
 
 def _normalize_gemini_api_base(api_base: str | None) -> str:
@@ -116,6 +122,7 @@ def make_provider(config: "Config", model: str | None = None) -> LLMProvider:
             "No model configured. Set agents.defaults.model in config.jsonc"
         )
     provider_config = config.get_provider(model)
+    provider_name = config.get_provider_name(model)
     if not provider_config:
         raise ValueError(
             f"未找到模型 '{model}' 对应的 Provider 或缺少 API Key\n"
@@ -127,7 +134,6 @@ def make_provider(config: "Config", model: str | None = None) -> LLMProvider:
             f"Provider type '{provider_type}' 无效，是否拼写错误？\n"
             f"有效值 Valid values: {', '.join(sorted(_VALID_PROVIDER_TYPES))}"
         )
-    spec = find_by_model(model)
     if provider_type == "openai_codex":
         from bao.providers.openai_codex_provider import OpenAICodexProvider
 
@@ -158,16 +164,19 @@ def make_provider(config: "Config", model: str | None = None) -> LLMProvider:
         )
     # openai
     from bao.providers.openai_provider import OpenAICompatibleProvider
+    from bao.providers.registry import get_default_api_base
 
+    provider_name = provider_name or "openai"
+    fallback_api_base = get_default_api_base(provider_name) or "https://api.openai.com/v1"
     api_base = _normalize_openai_api_base(
         provider_config.api_base,
-        spec.default_api_base if spec else "",
+        fallback_api_base,
     )
     return OpenAICompatibleProvider(
         api_key=api_key,
         api_base=api_base,
         default_model=model,
         extra_headers=provider_config.extra_headers,
-        provider_name=spec.name if spec else "openai",
+        provider_name=provider_name,
         model_prefix=model.split("/", 1)[0] if "/" in model else None,
     )

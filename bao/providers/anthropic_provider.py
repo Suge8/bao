@@ -25,6 +25,17 @@ from bao.providers.retry import (
 _MAX_RETRIES = DEFAULT_MAX_RETRIES
 _BASE_DELAY = DEFAULT_BASE_DELAY
 
+_PROXY_SAFE_DEFAULT_HEADERS = {
+    "User-Agent": "curl/8.7.1",
+    "X-Stainless-Lang": "",
+    "X-Stainless-Package-Version": "",
+    "X-Stainless-OS": "",
+    "X-Stainless-Arch": "",
+    "X-Stainless-Runtime": "",
+    "X-Stainless-Runtime-Version": "",
+    "X-Stainless-Async": "",
+}
+
 
 class AnthropicProvider(LLMProvider):
     """
@@ -57,18 +68,8 @@ class AnthropicProvider(LLMProvider):
         self.default_model = default_model
         client_kwargs: dict[str, Any] = {"api_key": api_key, "max_retries": 0}
         if base_url:
-            client_kwargs["base_url"] = base_url
-            # Some proxies block SDK-identifying headers → override them.
-            client_kwargs["default_headers"] = {
-                "User-Agent": "curl/8.7.1",
-                "X-Stainless-Lang": "",
-                "X-Stainless-Package-Version": "",
-                "X-Stainless-OS": "",
-                "X-Stainless-Arch": "",
-                "X-Stainless-Runtime": "",
-                "X-Stainless-Runtime-Version": "",
-                "X-Stainless-Async": "",
-            }
+            client_kwargs["base_url"] = base_url.rstrip("/")
+            client_kwargs["default_headers"] = _PROXY_SAFE_DEFAULT_HEADERS
         self._client = anthropic.AsyncAnthropic(**client_kwargs)
 
     def _resolve_model(self, model: str) -> str:
@@ -350,13 +351,21 @@ class AnthropicProvider(LLMProvider):
         if tools:
             request_kwargs["tools"] = self._convert_tools(tools)
 
-        # Handle thinking (adaptive thinking for supported Claude models)
+        reasoning_effort = kwargs.get("reasoning_effort")
+        disable_thinking = (
+            isinstance(reasoning_effort, str) and reasoning_effort.strip().lower() == "off"
+        )
+
         thinking = kwargs.get("thinking")
-        if thinking is None:
-            effort_budget = self._budget_from_reasoning_effort(kwargs.get("reasoning_effort"))
+        if thinking is None and not disable_thinking:
+            effort_budget = self._budget_from_reasoning_effort(reasoning_effort)
             if effort_budget:
                 thinking = {"type": "adaptive", "budget_tokens": effort_budget}
-        if thinking is None and self._supports_extended_thinking(resolved_model):
+        if (
+            thinking is None
+            and not disable_thinking
+            and self._supports_extended_thinking(resolved_model)
+        ):
             # Default to adaptive thinking for supported models
             thinking = {"type": "adaptive", "budget_tokens": 1024}
 
