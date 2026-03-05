@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from typing import Any, Awaitable, Callable
 
 import httpx
@@ -11,7 +12,7 @@ from loguru import logger
 from openai import AsyncOpenAI
 
 from bao.providers.api_mode_cache import get_cached_mode, set_cached_mode
-from bao.providers.base import LLMProvider, LLMResponse, normalize_tool_calls
+from bao.providers.base import LLMProvider, LLMResponse, ToolCallRequest, normalize_tool_calls
 from bao.providers.responses_compat import (
     convert_messages_to_responses,
     convert_tools_to_responses,
@@ -34,6 +35,23 @@ _ALLOWED_MSG_KEYS = frozenset({"role", "content", "tool_calls", "tool_call_id", 
 _PROBE_FALLBACK_CODES = frozenset({404, 405, 501})
 _MAX_RETRIES = DEFAULT_MAX_RETRIES
 _BASE_DELAY = DEFAULT_BASE_DELAY
+
+_CJK_CHAR_RE = re.compile(r"[\u3400-\u9FFF]")
+
+
+def _system_prompt_seems_ignored(system_prompt: str, content: str | None) -> bool:
+    if not system_prompt:
+        return False
+    text = (content or "").strip()
+    if not text:
+        return False
+    if "You are Bao" in system_prompt and re.search(r"\bCodex\b", text, re.I):
+        return True
+    if "Respond in 中文" in system_prompt and not _CJK_CHAR_RE.search(text):
+        return True
+    if re.search(r"what do you want to work on\?", text, re.I):
+        return True
+    return False
 
 
 class _ResponsesHTTPStatusError(RuntimeError):
@@ -79,25 +97,6 @@ class OpenAICompatibleProvider(LLMProvider):
     def _resolve_model(self, model: str) -> str:
         if self._model_prefix and model.lower().startswith(f"{self._model_prefix}/"):
             return model.split("/", 1)[1]
-        prefixes_to_strip = (
-            "openrouter/",
-            "deepseek/",
-            "groq/",
-            "anthropic/",
-            "gemini/",
-            "moonshot/",
-            "minimax/",
-            "qwen/",
-            "glm/",
-            "zhipu/",
-            "vllm/",
-            "ollama/",
-            "lm-studio/",
-        )
-        model_lower = model.lower()
-        for prefix in prefixes_to_strip:
-            if model_lower.startswith(prefix):
-                return model[len(prefix) :]
         return model
 
     @staticmethod
@@ -252,6 +251,147 @@ class OpenAICompatibleProvider(LLMProvider):
         if latest_response is None:
             raise ValueError("Cannot decode Responses payload")
         return latest_response
+
+    @staticmethod
+    async def _iter_sse_events(response: httpx.Response):
+        def _parse_buffer(lines: list[str]) -> dict[str, Any] | None:
+            if not lines:
+                return None
+            data_lines = [item[5:].strip() for item in lines if item.startswith("data:")]
+            if not data_lines:
+                return None
+            data = "\n".join(data_lines).strip()
+            if not data or data == "[DONE]":
+                return None
+            try:
+                event = json.loads(data)
+            except Exception:
+                return None
+            return event if isinstance(event, dict) else None
+
+        buffer: list[str] = []
+        async for line in response.aiter_lines():
+            if line == "":
+                event = _parse_buffer(buffer)
+                buffer = []
+                if event is not None:
+                    yield event
+                continue
+            buffer.append(line)
+
+        event = _parse_buffer(buffer)
+        if event is not None:
+            yield event
+
+    @staticmethod
+    def _map_responses_finish_reason(status: str | None) -> str:
+        return {
+            "completed": "stop",
+            "incomplete": "length",
+            "failed": "error",
+            "cancelled": "error",
+        }.get(status or "completed", "stop")
+
+    @staticmethod
+    def _progress_callback_error_response(exc: ProgressCallbackError) -> LLMResponse:
+        if isinstance(exc, StreamInterruptedError):
+            return LLMResponse(content=None, finish_reason="interrupted")
+        cause = exc.__cause__ or exc
+        return LLMResponse(
+            content=f"Error calling LLM progress callback: {safe_error_text(cause)}",
+            finish_reason="error",
+        )
+
+    async def _consume_responses_stream(
+        self,
+        response: httpx.Response,
+        on_progress: Callable[[str], Awaitable[None]] | None,
+    ) -> LLMResponse:
+        content = ""
+        tool_calls: list[ToolCallRequest] = []
+        tool_call_buffers: dict[str, dict[str, Any]] = {}
+        finish_reason = "stop"
+        usage: dict[str, int] = {}
+
+        async for event in self._iter_sse_events(response):
+            event_type = event.get("type")
+
+            if event_type == "response.output_text.delta":
+                delta = event.get("delta") or ""
+                if delta:
+                    content += delta
+                    await emit_progress(on_progress, delta)
+                continue
+
+            if event_type == "response.output_item.added":
+                item = event.get("item") or {}
+                if item.get("type") == "function_call":
+                    call_id = item.get("call_id")
+                    if call_id:
+                        tool_call_buffers[call_id] = {
+                            "id": item.get("id") or "fc_0",
+                            "name": item.get("name") or "unknown_tool",
+                            "arguments": item.get("arguments") or "",
+                        }
+                continue
+
+            if event_type == "response.function_call_arguments.delta":
+                call_id = event.get("call_id")
+                if call_id and call_id in tool_call_buffers:
+                    tool_call_buffers[call_id]["arguments"] += event.get("delta") or ""
+                continue
+
+            if event_type == "response.function_call_arguments.done":
+                call_id = event.get("call_id")
+                if call_id and call_id in tool_call_buffers:
+                    tool_call_buffers[call_id]["arguments"] = event.get("arguments") or ""
+                continue
+
+            if event_type == "response.output_item.done":
+                item = event.get("item") or {}
+                if item.get("type") != "function_call":
+                    continue
+                call_id = item.get("call_id")
+                if not call_id:
+                    continue
+                buf = tool_call_buffers.get(call_id) or {}
+                args_raw = buf.get("arguments") or item.get("arguments") or "{}"
+                try:
+                    args = json.loads(args_raw)
+                except Exception:
+                    args = {"raw": args_raw}
+                if not isinstance(args, dict):
+                    args = {}
+                tool_calls.append(
+                    ToolCallRequest(
+                        id=f"{call_id}|{buf.get('id') or item.get('id') or 'fc_0'}",
+                        name=str(buf.get("name") or item.get("name") or "unknown_tool"),
+                        arguments=args,
+                    )
+                )
+                continue
+
+            if event_type == "response.completed":
+                response_obj = event.get("response") or {}
+                finish_reason = self._map_responses_finish_reason(response_obj.get("status"))
+                raw_usage = response_obj.get("usage")
+                if isinstance(raw_usage, dict):
+                    usage = {
+                        "prompt_tokens": raw_usage.get("input_tokens", 0),
+                        "completion_tokens": raw_usage.get("output_tokens", 0),
+                        "total_tokens": raw_usage.get("total_tokens", 0),
+                    }
+                continue
+
+            if event_type in {"error", "response.failed"}:
+                raise RuntimeError("Responses stream failed")
+
+        return LLMResponse(
+            content=content or None,
+            tool_calls=tool_calls,
+            finish_reason=finish_reason,
+            usage=usage,
+        )
 
     async def chat(
         self,
@@ -506,6 +646,7 @@ class OpenAICompatibleProvider(LLMProvider):
         reasoning_effort: str | None = None,
     ) -> LLMResponse:
         allow_fallback = True
+        system_prompt, _ = convert_messages_to_responses(messages)
         body = self._build_responses_body(
             model,
             messages,
@@ -514,6 +655,7 @@ class OpenAICompatibleProvider(LLMProvider):
             temperature,
             reasoning_effort,
         )
+        body["stream"] = True
         url = f"{self._effective_base.rstrip('/')}/responses"
         headers = self._build_responses_headers()
 
@@ -522,18 +664,88 @@ class OpenAICompatibleProvider(LLMProvider):
             try:
                 await emit_progress_reset(on_progress)
             except ProgressCallbackError as exc:
-                if isinstance(exc, StreamInterruptedError):
-                    return LLMResponse(content=None, finish_reason="interrupted")
-                cause = exc.__cause__ or exc
-                return LLMResponse(
-                    content=f"Error calling LLM progress callback: {safe_error_text(cause)}",
-                    finish_reason="error",
-                )
+                return self._progress_callback_error_response(exc)
             try:
                 async with httpx.AsyncClient(timeout=120.0) as client:
-                    resp = await client.post(url, headers=headers, json=body)
+                    async with client.stream("POST", url, headers=headers, json=body) as resp:
+                        if resp.status_code == 200:
+                            result = await self._consume_responses_stream(resp, on_progress)
+                            if allow_fallback and _system_prompt_seems_ignored(
+                                system_prompt, result.content
+                            ):
+                                set_cached_mode(self._effective_base, "completions")
+                                return await self._chat_completions(
+                                    model,
+                                    messages,
+                                    tools,
+                                    max_tokens,
+                                    temperature,
+                                    on_progress,
+                                    source,
+                                    reasoning_effort,
+                                )
+                            return result
+
+                        status_err = _ResponsesHTTPStatusError(resp)
+                        last_err = status_err
+                        if resp.status_code in _PROBE_FALLBACK_CODES and allow_fallback:
+                            logger.debug(
+                                "🤖 响应不支持 / unsupported: [{}] status {}, falling back to Chat Completions",
+                                source,
+                                resp.status_code,
+                            )
+                            set_cached_mode(self._effective_base, "completions")
+                            return await self._chat_completions(
+                                model,
+                                messages,
+                                tools,
+                                max_tokens,
+                                temperature,
+                                on_progress,
+                                source,
+                                reasoning_effort,
+                            )
+
+                        if should_retry_exception(status_err) and attempt < _MAX_RETRIES:
+                            delay = compute_retry_delay(status_err, attempt, base_delay=_BASE_DELAY)
+                            logger.warning(
+                                "⚠️ HTTP 重试中 / retrying: [{}] transient HTTP {} (attempt {}/{}), in {:.1f}s",
+                                source,
+                                resp.status_code,
+                                attempt + 1,
+                                _MAX_RETRIES + 1,
+                                delay,
+                            )
+                            await asyncio.sleep(delay)
+                            continue
+
+                        if allow_fallback:
+                            logger.debug(
+                                "🤖 回退补全 / fallback: [{}] Responses returned {} model={} base={}, trying Chat Completions",
+                                source,
+                                resp.status_code,
+                                model,
+                                self._effective_base,
+                            )
+                            return await self._chat_completions(
+                                model,
+                                messages,
+                                tools,
+                                max_tokens,
+                                temperature,
+                                on_progress,
+                                source,
+                                reasoning_effort,
+                            )
+
+                        return LLMResponse(
+                            content=f"Error calling Responses API: {safe_error_text(status_err)}",
+                            finish_reason="error",
+                        )
             except asyncio.CancelledError:
                 raise
+            except ProgressCallbackError as exc:
+                return self._progress_callback_error_response(exc)
             except Exception as exc:
                 last_err = exc
                 if should_retry_exception(exc) and attempt < _MAX_RETRIES:
@@ -573,107 +785,6 @@ class OpenAICompatibleProvider(LLMProvider):
                     finish_reason="error",
                 )
 
-            if resp.status_code == 200:
-                try:
-                    return self._build_responses_result(self._decode_responses_payload(resp))
-                except Exception as exc:
-                    parse_err = RuntimeError("incomplete responses payload")
-                    parse_err.__cause__ = exc
-                    last_err = parse_err
-                    if attempt < _MAX_RETRIES:
-                        delay = compute_retry_delay(parse_err, attempt, base_delay=_BASE_DELAY)
-                        logger.warning(
-                            "⚠️ 负载重试中 / retrying: [{}] payload parse failed (attempt {}/{}), in {:.1f}s: {}",
-                            source,
-                            attempt + 1,
-                            _MAX_RETRIES + 1,
-                            delay,
-                            safe_error_text(exc),
-                        )
-                        await asyncio.sleep(delay)
-                        continue
-
-                    if allow_fallback:
-                        logger.debug(
-                            "🤖 回退补全 / fallback: [{}] payload parse failed model={} base={} ({}), trying Chat Completions",
-                            source,
-                            model,
-                            self._effective_base,
-                            safe_error_text(exc),
-                        )
-                        return await self._chat_completions(
-                            model,
-                            messages,
-                            tools,
-                            max_tokens,
-                            temperature,
-                            on_progress,
-                            source,
-                            reasoning_effort,
-                        )
-
-                    return LLMResponse(
-                        content=f"Error calling Responses API: {safe_error_text(parse_err)}",
-                        finish_reason="error",
-                    )
-
-            status_err = _ResponsesHTTPStatusError(resp)
-            last_err = status_err
-            if resp.status_code in _PROBE_FALLBACK_CODES and allow_fallback:
-                logger.debug(
-                    "🤖 响应不支持 / unsupported: [{}] status {}, falling back to Chat Completions",
-                    source,
-                    resp.status_code,
-                )
-                set_cached_mode(self._effective_base, "completions")
-                return await self._chat_completions(
-                    model,
-                    messages,
-                    tools,
-                    max_tokens,
-                    temperature,
-                    on_progress,
-                    source,
-                    reasoning_effort,
-                )
-
-            if should_retry_exception(status_err) and attempt < _MAX_RETRIES:
-                delay = compute_retry_delay(status_err, attempt, base_delay=_BASE_DELAY)
-                logger.warning(
-                    "⚠️ HTTP 重试中 / retrying: [{}] transient HTTP {} (attempt {}/{}), in {:.1f}s",
-                    source,
-                    resp.status_code,
-                    attempt + 1,
-                    _MAX_RETRIES + 1,
-                    delay,
-                )
-                await asyncio.sleep(delay)
-                continue
-
-            if allow_fallback:
-                logger.debug(
-                    "🤖 回退补全 / fallback: [{}] Responses returned {} model={} base={}, trying Chat Completions",
-                    source,
-                    resp.status_code,
-                    model,
-                    self._effective_base,
-                )
-                return await self._chat_completions(
-                    model,
-                    messages,
-                    tools,
-                    max_tokens,
-                    temperature,
-                    on_progress,
-                    source,
-                    reasoning_effort,
-                )
-
-            return LLMResponse(
-                content=f"Error calling Responses API: {safe_error_text(status_err)}",
-                finish_reason="error",
-            )
-
         return LLMResponse(
             content=(
                 "Error calling Responses API: "
@@ -693,6 +804,7 @@ class OpenAICompatibleProvider(LLMProvider):
         source: str = "main",
         reasoning_effort: str | None = None,
     ) -> LLMResponse:
+        system_prompt, _ = convert_messages_to_responses(messages)
         body = self._build_responses_body(
             model,
             messages,
@@ -728,6 +840,18 @@ class OpenAICompatibleProvider(LLMProvider):
 
             if resp.status_code == 200:
                 result = self._build_responses_result(self._decode_responses_payload(resp))
+                if _system_prompt_seems_ignored(system_prompt, result.content):
+                    set_cached_mode(self._effective_base, "completions")
+                    return await self._chat_completions(
+                        model,
+                        messages,
+                        tools,
+                        max_tokens,
+                        temperature,
+                        on_progress,
+                        source,
+                        reasoning_effort,
+                    )
                 set_cached_mode(self._effective_base, "responses")
                 logger.info("🤖 响应已启用 / detected: [{}] Responses API cached", source)
                 return result

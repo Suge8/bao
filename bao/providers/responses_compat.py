@@ -28,7 +28,18 @@ def convert_messages_to_responses(
         content = msg.get("content")
 
         if role == "system":
-            system_prompt = content if isinstance(content, str) else ""
+            if isinstance(content, str):
+                system_prompt = content
+            elif isinstance(content, list):
+                parts: list[str] = []
+                for item in content:
+                    if isinstance(item, dict) and isinstance(item.get("text"), str):
+                        parts.append(item["text"])
+                    elif isinstance(item, str):
+                        parts.append(item)
+                system_prompt = "".join(parts).strip()
+            else:
+                system_prompt = ""
             continue
 
         # Flush pending screenshot images before non-tool message
@@ -37,11 +48,13 @@ def convert_messages_to_responses(
                 {"type": "input_text", "text": "[screenshot from tool above]"},
             ]
             for ib64 in pending_images:
-                img_content.append({
-                    "type": "input_image",
-                    "image_url": f"data:image/jpeg;base64,{ib64}",
-                    "detail": "auto",
-                })
+                img_content.append(
+                    {
+                        "type": "input_image",
+                        "image_url": f"data:image/jpeg;base64,{ib64}",
+                        "detail": "auto",
+                    }
+                )
             input_items.append({"role": "user", "content": img_content})
             pending_images = []
 
@@ -99,11 +112,13 @@ def convert_messages_to_responses(
             {"type": "input_text", "text": "[screenshot from tool above]"},
         ]
         for ib64 in pending_images:
-            img_content.append({
-                "type": "input_image",
-                "image_url": f"data:image/jpeg;base64,{ib64}",
-                "detail": "auto",
-            })
+            img_content.append(
+                {
+                    "type": "input_image",
+                    "image_url": f"data:image/jpeg;base64,{ib64}",
+                    "detail": "auto",
+                }
+            )
         input_items.append({"role": "user", "content": img_content})
 
     return system_prompt, input_items

@@ -472,38 +472,25 @@ class Config(BaseSettings):
     def _match_provider(
         self, model: str | None = None
     ) -> tuple["ProviderConfig | None", str | None]:
-        from bao.providers.registry import find_by_model
-
         model_str = model or self.agents.defaults.model
         if not model_str:
             return None, None
-        spec = find_by_model(model_str)
-        if not spec:
+        model_prefix = model_str.split("/", 1)[0] if "/" in model_str else ""
+        normalized_prefix = model_prefix.lower().replace("-", "_")
+
+        def _has_usable_key(p: ProviderConfig) -> bool:
+            return p.type == "openai_codex" or bool(p.api_key.get_secret_value())
+
+        if normalized_prefix:
+            for provider_name, provider in self.providers.items():
+                if provider_name.lower().replace("-", "_") == normalized_prefix:
+                    return (provider if _has_usable_key(provider) else None), provider_name
             return None, None
-        model_prefix = model_str.lower().split("/", 1)[0] if "/" in model_str else ""
-        normalized_prefix = model_prefix.replace("-", "_")
-        expected_type = spec.provider_type.value
-        allow_no_key = expected_type == "openai_codex"
-        # Priority 1: config provider name matches model prefix
+
         for provider_name, provider in self.providers.items():
-            if (
-                provider_name.replace("-", "_") == normalized_prefix
-                and provider.type == expected_type
-                and (provider.api_key.get_secret_value() or allow_no_key)
-            ):
-                return provider, spec.name
-        # Priority 2: matching type with api_key
-        for provider in self.providers.values():
-            if provider.type == expected_type and (
-                provider.api_key.get_secret_value() or allow_no_key
-            ):
-                return provider, spec.name
-        if expected_type != "openai":
-            return None, spec.name
-        for provider in self.providers.values():
-            if provider.type == "openai" and provider.api_key.get_secret_value():
-                return provider, spec.name
-        return None, spec.name
+            if _has_usable_key(provider):
+                return provider, provider_name
+        return None, None
 
     def get_provider(self, model: str | None = None) -> ProviderConfig | None:
         """Get matched provider config (api_key, api_base, extra_headers). Falls back to first available."""
@@ -511,7 +498,7 @@ class Config(BaseSettings):
         return p
 
     def get_provider_name(self, model: str | None = None) -> str | None:
-        """Get the registry name of the matched provider (e.g. "deepseek", "openrouter")."""
+        """Get the matched provider config name (dict key under providers)."""
         _, name = self._match_provider(model)
         return name
 
@@ -521,17 +508,18 @@ class Config(BaseSettings):
         return p.api_key.get_secret_value() if p else None
 
     def get_api_base(self, model: str | None = None) -> str | None:
-        from bao.providers.registry import find_by_name
-
-        p, name = self._match_provider(model)
+        p, _ = self._match_provider(model)
         if p and p.api_base:
             return p.api_base
 
-        if name:
-            spec = find_by_name(name)
-            if spec and spec.default_api_base:
-                return spec.default_api_base
-
+        if not p:
+            return None
+        if p.type == "openai":
+            return "https://api.openai.com/v1"
+        if p.type == "anthropic":
+            return "https://api.anthropic.com"
+        if p.type == "gemini":
+            return "https://generativelanguage.googleapis.com/v1beta/models"
         return None
 
     model_config = SettingsConfigDict(env_prefix="bao_", env_nested_delimiter="__")

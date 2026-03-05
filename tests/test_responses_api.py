@@ -11,7 +11,7 @@ from pydantic import SecretStr
 
 from bao.providers.api_mode_cache import get_cached_mode, set_cached_mode
 from bao.providers.base import LLMResponse
-from bao.providers.openai_provider import OpenAICompatibleProvider
+from bao.providers.openai_provider import OpenAICompatibleProvider, _system_prompt_seems_ignored
 from bao.providers.responses_compat import (
     convert_messages_to_responses,
     convert_tools_to_responses,
@@ -44,6 +44,22 @@ def test_convert_messages_to_responses():
     assert input_items[3]["type"] == "function_call_output"
     assert input_items[3]["output"] == "result"
     print("✓ convert_messages_to_responses")
+
+
+def test_convert_messages_to_responses_accepts_system_blocks() -> None:
+    messages = [
+        {
+            "role": "system",
+            "content": [
+                {"type": "text", "text": "You are helpful."},
+            ],
+        },
+        {"role": "user", "content": "Hello"},
+    ]
+    system_prompt, input_items = convert_messages_to_responses(messages)
+    assert system_prompt == "You are helpful."
+    assert len(input_items) == 1
+    assert input_items[0]["role"] == "user"
 
 
 def test_convert_tools_to_responses():
@@ -155,6 +171,11 @@ def test_make_provider_uses_auto_mode_detection():
     print("\u2713 make_provider uses auto mode detection")
 
 
+def test_system_prompt_ignored_heuristic_detects_codex_identity() -> None:
+    system_prompt = "You are Bao. Respond in 中文."
+    assert _system_prompt_seems_ignored(system_prompt, "I am Codex (GPT-5)")
+
+
 def test_utility_model_uses_same_provider_path(tmp_path):
     import bao.providers.api_mode_cache as cache_mod
     from bao.config.schema import Config, ProviderConfig
@@ -212,14 +233,16 @@ def test_openai_api_base_accepts_full_endpoint_and_normalizes_to_version_base():
 def test_anthropic_and_gemini_api_base_auto_completion():
     from bao.providers import _normalize_anthropic_api_base, _normalize_gemini_api_base
 
-    assert _normalize_anthropic_api_base("https://proxy.example.com/messages") == (
-        "https://proxy.example.com/v1"
+    assert (
+        _normalize_anthropic_api_base("https://proxy.example.com/messages")
+        == "https://proxy.example.com"
     )
-    assert _normalize_anthropic_api_base("https://proxy.example.com/v1/messages") == (
-        "https://proxy.example.com/v1"
+    assert (
+        _normalize_anthropic_api_base("https://proxy.example.com/v1/messages")
+        == "https://proxy.example.com"
     )
-    assert _normalize_anthropic_api_base("https://proxy.example.com/v1") == (
-        "https://proxy.example.com/v1"
+    assert (
+        _normalize_anthropic_api_base("https://proxy.example.com/v1") == "https://proxy.example.com"
     )
 
     assert _normalize_gemini_api_base("https://proxy.example.com/models") == (
@@ -325,6 +348,131 @@ def test_responses_non_200_falls_back_without_caching_responses(monkeypatch, tmp
     finally:
         cache_mod._cache = old_cache
         cache_mod._CACHE_FILE = old_file
+
+
+def test_chat_responses_streams_output_deltas(monkeypatch):
+    p = OpenAICompatibleProvider(api_key="k", api_base="https://z.com/v1")
+    emitted: list[str] = []
+
+    class _Resp:
+        status_code = 200
+
+        async def aiter_lines(self):
+            lines = [
+                'data: {"type":"response.output_text.delta","delta":"Hello"}',
+                "",
+                'data: {"type":"response.output_text.delta","delta":" world"}',
+                "",
+                (
+                    'data: {"type":"response.completed","response":{"status":"completed",'
+                    '"usage":{"input_tokens":1,"output_tokens":2,"total_tokens":3}}}'
+                ),
+                "",
+                "data: [DONE]",
+                "",
+            ]
+            for line in lines:
+                yield line
+
+    class _StreamCtx:
+        async def __aenter__(self):
+            return _Resp()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    class _Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def stream(self, *args, **kwargs):
+            return _StreamCtx()
+
+    monkeypatch.setattr(
+        "bao.providers.openai_provider.httpx.AsyncClient", lambda timeout: _Client()
+    )
+
+    async def _on_progress(chunk: str) -> None:
+        emitted.append(chunk)
+
+    result = asyncio.run(
+        p._chat_responses(
+            "gpt-4o",
+            [{"role": "user", "content": "hi"}],
+            None,
+            256,
+            0.1,
+            on_progress=_on_progress,
+        )
+    )
+
+    assert result.content == "Hello world"
+    assert result.finish_reason == "stop"
+    assert result.usage == {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3}
+    assert emitted == ["\x00", "Hello", " world"]
+
+
+def test_chat_responses_stream_without_trailing_blank(monkeypatch):
+    p = OpenAICompatibleProvider(api_key="k", api_base="https://z.com/v1")
+    emitted: list[str] = []
+
+    class _Resp:
+        status_code = 200
+
+        async def aiter_lines(self):
+            lines = [
+                'data: {"type":"response.output_text.delta","delta":"Hello"}',
+                "",
+                (
+                    'data: {"type":"response.completed","response":{"status":"completed",'
+                    '"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}'
+                ),
+            ]
+            for line in lines:
+                yield line
+
+    class _StreamCtx:
+        async def __aenter__(self):
+            return _Resp()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    class _Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def stream(self, *args, **kwargs):
+            return _StreamCtx()
+
+    monkeypatch.setattr(
+        "bao.providers.openai_provider.httpx.AsyncClient", lambda timeout: _Client()
+    )
+
+    async def _on_progress(chunk: str) -> None:
+        emitted.append(chunk)
+
+    result = asyncio.run(
+        p._chat_responses(
+            "gpt-4o",
+            [{"role": "user", "content": "hi"}],
+            None,
+            256,
+            0.1,
+            on_progress=_on_progress,
+        )
+    )
+
+    assert result.content == "Hello"
+    assert result.finish_reason == "stop"
+    assert result.usage == {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+    assert emitted == ["\x00", "Hello"]
 
 
 if __name__ == "__main__":
