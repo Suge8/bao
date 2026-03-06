@@ -6,6 +6,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/), and this pro
 
 ## [Unreleased]
 
+## [0.3.10] - 2026-03-06
+
+### Added
+
+- **打包模板资源正式入库** — `bao/templates/workspace/{en,zh}` 的 onboarding 模板现已随仓库跟踪，GitHub Actions checkout 后可直接参与桌面构建与首次引导。
+
+### Fixed
+
+- **Desktop Release 三平台前置失败** — macOS/Windows Nuitka 脚本恢复为打包稳定存在的 `bao/templates/workspace` 根目录，不再对子语言目录逐条声明，避免在参数解析阶段因源目录不可见而提前退出。
+- **包内模板被误忽略** — `.gitignore` 的 `workspace/` 规则改为仅匹配仓库根 `/workspace/`，不再误伤 `bao/templates/workspace/` 下的包内模板资源。
+- **桌面打包回归缺少护栏** — 新增 build-script 回归测试，锁定模板目录存在性与 `workspace` 根目录打包契约，避免后续再次把发布流程改回脆弱路径。
+
 ## [0.3.9] - 2026-03-06
 
 ### Added
