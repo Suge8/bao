@@ -12,9 +12,11 @@ Item {
     // Array of { label: string, value: any }
     property var options: []
 
-    // For SettingsView.collectFields()
-    property var currentValue: _loaded ? valueForIndex(combo.currentIndex) : undefined
+    // For SettingsView.collectFields(): only emit when config had a real value or user changed it.
+    property var currentValue: (_loaded && (_dirty || _hasInitialValue)) ? valueForIndex(combo.currentIndex) : undefined
     property bool _loaded: false
+    property bool _dirty: false
+    property bool _hasInitialValue: false
     property int popupMaxHeight: sizeDropdownMaxHeight
 
     signal valueChanged(var value)
@@ -38,15 +40,29 @@ Item {
 
     function presetValue(v) {
         var idx = indexForValue(v)
-        if (idx < 0) return
+        if (idx < 0) return false
         combo.currentIndex = idx
+        return true
+    }
+
+    function readConfigValue() {
+        if (!configService || !dotpath)
+            return {"exists": false, "value": undefined}
+        var parts = dotpath.split(".")
+        if (parts.length === 0)
+            return {"exists": false, "value": undefined}
+        var key = parts[parts.length - 1]
+        var parentPath = parts.slice(0, parts.length - 1).join(".")
+        var parentValue = parentPath !== "" ? configService.getValue(parentPath) : undefined
+        if (!parentValue || typeof parentValue !== "object" || Array.isArray(parentValue) || !parentValue.hasOwnProperty(key))
+            return {"exists": false, "value": undefined}
+        return {"exists": true, "value": parentValue[key]}
     }
 
     Component.onCompleted: {
-        if (configService && dotpath) {
-            var v = configService.getValue(dotpath)
-            presetValue(v)
-        }
+        var state = readConfigValue()
+        if (state.exists && presetValue(state.value))
+            _hasInitialValue = true
         _loaded = true
     }
 
@@ -152,6 +168,21 @@ Item {
                     y: combo.height + 6
                     width: combo.width
                     padding: 6
+                    transformOrigin: Item.Top
+
+                    enter: Transition {
+                        ParallelAnimation {
+                            NumberAnimation { property: "opacity"; from: 0; to: 1; duration: motionFast; easing.type: easeStandard }
+                            NumberAnimation { property: "scale"; from: 0.98; to: 1.0; duration: motionFast; easing.type: easeEmphasis }
+                        }
+                    }
+
+                    exit: Transition {
+                        ParallelAnimation {
+                            NumberAnimation { property: "opacity"; from: 1; to: 0; duration: motionMicro; easing.type: easeStandard }
+                            NumberAnimation { property: "scale"; from: 1.0; to: 0.985; duration: motionMicro; easing.type: easeStandard }
+                        }
+                    }
 
                     implicitHeight: Math.min(contentItem.implicitHeight + topPadding + bottomPadding, root.popupMaxHeight)
 
@@ -177,6 +208,7 @@ Item {
 
                 onActivated: function(index) {
                     if (!root._loaded) return
+                    root._dirty = true
                     root.valueChanged(root.valueForIndex(index))
                 }
             }

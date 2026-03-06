@@ -36,10 +36,19 @@ Item {
         return t
     }
 
+    function _writeText(val, markDirty) {
+        field.text = (val !== undefined && val !== null) ? String(val) : ""
+        if (markDirty)
+            _dirty = true
+    }
+
     function presetText(val) {
-        if (val !== undefined && val !== null && String(val) !== "") {
-            field.text = String(val)
-        }
+        if (val !== undefined && val !== null && String(val) !== "")
+            _writeText(val, false)
+    }
+
+    function setCurrentText(val) {
+        _writeText(val, true)
     }
 
     Component.onCompleted: {

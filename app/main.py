@@ -22,6 +22,8 @@ from PySide6.QtCore import (
     Slot,
 )
 from PySide6.QtGui import (
+    QFont,
+    QFontDatabase,
     QColor,
     QCursor,
     QGuiApplication,
@@ -225,40 +227,62 @@ def resolve_qml_path(qml_arg: str | None) -> Path:
     return candidates[0].resolve()
 
 
-def resolve_logo_path() -> Path | None:
-    candidates: list[Path] = []
-    src_root = Path(__file__).resolve().parent.parent
-    candidates.extend(
-        [
-            src_root / "assets" / "logo.jpg",
-            src_root / "assets" / "logo.jpeg",
-            src_root / "assets" / "logo.png",
-        ]
+def _icon_relative_paths(*, frozen: bool) -> tuple[str, ...]:
+    if sys.platform == "win32":
+        if frozen:
+            return (
+                "resources/logo-circle.png",
+                "app/resources/logo-circle.png",
+                "assets/logo.ico",
+                "assets/logo.jpg",
+                "assets/logo.jpeg",
+                "assets/logo.png",
+            )
+        return (
+            "app/resources/logo-circle.png",
+            "assets/logo.ico",
+            "assets/logo.jpg",
+            "assets/logo.jpeg",
+            "assets/logo.png",
+        )
+
+    return (
+        "assets/logo.jpg",
+        "assets/logo.jpeg",
+        "assets/logo.png",
+        "assets/logo.ico",
     )
 
-    if getattr(sys, "frozen", False):
-        exe = Path(sys.executable).resolve()
-        meipass = getattr(sys, "_MEIPASS", "")
-        frozen_roots = [
-            Path(meipass) if meipass else None,
-            exe.parent,
-            exe.parent.parent / "Resources",
-        ]
-        for root in frozen_roots:
-            if root is None:
-                continue
-            candidates.extend(
-                [
-                    root / "assets" / "logo.jpg",
-                    root / "assets" / "logo.jpeg",
-                    root / "assets" / "logo.png",
-                ]
-            )
 
-    for path in candidates:
-        if path.exists():
-            return path.resolve()
+def _icon_candidate_groups() -> list[tuple[Path, tuple[str, ...]]]:
+    src_root = Path(__file__).resolve().parent.parent
+    groups: list[tuple[Path, tuple[str, ...]]] = [(src_root, _icon_relative_paths(frozen=False))]
+    if not getattr(sys, "frozen", False):
+        return groups
+
+    exe = Path(sys.executable).resolve()
+    meipass = getattr(sys, "_MEIPASS", "")
+    frozen_roots = [Path(meipass)] if meipass else []
+    frozen_roots.extend([exe.parent, exe.parent.parent / "Resources"])
+    frozen_paths = _icon_relative_paths(frozen=True)
+    groups.extend((root, frozen_paths) for root in frozen_roots)
+    return groups
+
+
+def resolve_app_icon_path() -> Path | None:
+    for root, relative_paths in _icon_candidate_groups():
+        for relative_path in relative_paths:
+            path = root / relative_path
+            if path.exists():
+                return path.resolve()
     return None
+
+
+def load_app_icon(icon_path: Path) -> QIcon | None:
+    if icon_path.suffix.lower() == ".ico":
+        icon = QIcon(str(icon_path))
+        return None if icon.isNull() else icon
+    return build_rounded_icon(icon_path) or QIcon(str(icon_path))
 
 
 def build_rounded_icon(image_path: Path) -> QIcon | None:
@@ -366,6 +390,21 @@ def detect_system_ui_language() -> str:
     return "en"
 
 
+def preferred_app_font_family() -> str | None:
+    families = set(QFontDatabase.families())
+    for family in (
+        "Helvetica Neue",
+        ".AppleSystemUIFont",
+        "Segoe UI",
+        "Arial",
+        "Noto Sans",
+        "DejaVu Sans",
+    ):
+        if family in families:
+            return family
+    return None
+
+
 def _apply_windows_rounded_corners(window: QQuickWindow) -> bool:
     if sys.platform != "win32":
         return False
@@ -469,10 +508,13 @@ def main() -> int:
     QSurfaceFormat.setDefaultFormat(fmt)
 
     app = QGuiApplication(sys.argv)
-    logo_path = resolve_logo_path()
+    preferred_font = preferred_app_font_family()
+    if preferred_font:
+        app.setFont(QFont(preferred_font))
+    logo_path = resolve_app_icon_path()
     logo_icon: QIcon | None = None
     if logo_path:
-        logo_icon = build_rounded_icon(logo_path) or QIcon(str(logo_path))
+        logo_icon = load_app_icon(logo_path)
     if logo_icon:
         app.setWindowIcon(logo_icon)
     engine = QQmlApplicationEngine()
@@ -508,17 +550,11 @@ def main() -> int:
     set_language = cast(Callable[[str], None], chat_service.setLanguage)
     set_language(_ui_lang)
 
-    # Early SessionManager for browsing history without gateway
-    from bao.session.manager import SessionManager
-
     workspace_value = config_service.get("agents.defaults.workspace", "~/.bao/workspace")
     workspace_str = workspace_value if isinstance(workspace_value, str) else "~/.bao/workspace"
     _ws = Path(workspace_str).expanduser()
-    _ws.mkdir(parents=True, exist_ok=True)
-    _early_sm = SessionManager(_ws)
-    session_service.initialize(_early_sm)
     set_session_manager = cast(Callable[[object], None], chat_service.setSessionManager)
-    set_session_manager(_early_sm)
+    _ = session_service.sessionManagerReady.connect(set_session_manager)
 
     set_gateway_ready = cast(Callable[[], None], session_service.setGatewayReady)
 
@@ -526,14 +562,7 @@ def main() -> int:
         set_gateway_ready()
         session_service.initialize(sm)
 
-    def _refresh_sessions_on_final_status(_row: int, status: str) -> None:
-        if status not in {"done", "error"}:
-            return
-        refresh = cast(Callable[[], None], session_service.refresh)
-        refresh()
-
     _ = chat_service.gatewayReady.connect(_on_gateway_ready)
-    _ = chat_service.statusUpdated.connect(_refresh_sessions_on_final_status)
     # Wire session → gateway: when active session changes, update gateway session key
     set_session_key = cast(Callable[[str], None], chat_service.setSessionKey)
     _ = session_service.activeKeyChanged.connect(set_session_key)
@@ -542,6 +571,7 @@ def main() -> int:
     # Wire session deletion → gateway: cancel streaming if needed
     handle_deleted = cast(Callable[[str, bool, str], None], chat_service.handle_session_deleted)
     _ = session_service.deleteCompleted.connect(handle_deleted)
+    session_service.bootstrapWorkspace(str(_ws))
     _ = update_bridge.checkRequested.connect(update_service.check_for_updates)
     _ = update_bridge.installRequested.connect(update_service.install_update)
     _ = update_bridge.reloadRequested.connect(update_service.reloadConfig)

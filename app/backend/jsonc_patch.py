@@ -192,6 +192,60 @@ class PatchError:
     message: str
 
 
+@dataclass
+class _InsertionBatch:
+    insert_pos: int
+    close_brace: int
+    had_existing_children: bool
+    items: list[tuple[str, object]] = field(default_factory=list)
+
+
+def _brace_indent(text: str, close_brace: int) -> str:
+    line_start = text.rfind("\n", 0, close_brace)
+    if line_start == -1:
+        return ""
+
+    indent = ""
+    for ch in text[line_start + 1 : close_brace]:
+        if ch not in (" ", "\t"):
+            break
+        indent += ch
+    return indent
+
+
+def _queue_insertion(
+    node: _ObjNode,
+    key: str,
+    value: object,
+    insertion_batches: dict[int, _InsertionBatch],
+) -> None:
+    insert_pos = node.insert_before
+    batch = insertion_batches.get(insert_pos)
+    if batch is None:
+        batch = _InsertionBatch(
+            insert_pos=insert_pos,
+            close_brace=node.close_brace,
+            had_existing_children=bool(node.children),
+        )
+        insertion_batches[insert_pos] = batch
+    batch.items.append((key, value))
+
+
+def _build_insertion_patch(batch: _InsertionBatch, text: str) -> tuple[int, int, str]:
+    value_indent = _brace_indent(text, batch.close_brace) + "  "
+    pieces: list[str] = []
+    for idx, (key, value) in enumerate(batch.items):
+        prefix = ",\n" if batch.had_existing_children or idx > 0 else "\n"
+        pieces.append(
+            prefix
+            + value_indent
+            + json.dumps(key, ensure_ascii=False)
+            + ": "
+            + json.dumps(value, ensure_ascii=False)
+        )
+    return batch.insert_pos, batch.insert_pos, "".join(pieces)
+
+
 def patch_jsonc(
     text: str,
     changes: dict[str, object],
@@ -216,12 +270,16 @@ def patch_jsonc(
 
     patches: list[tuple[int, int, str]] = []  # (start, end, replacement)
     errors: list[PatchError] = []
+    insertion_batches: dict[int, _InsertionBatch] = {}
 
     for dotpath, new_value in changes.items():
         path = dotpath.split(".")
-        err = _collect_patch(root, path, new_value, text, patches)
+        err = _collect_patch(root, path, new_value, patches, insertion_batches)
         if err:
             errors.append(PatchError(path, err))
+
+    for batch in insertion_batches.values():
+        patches.append(_build_insertion_patch(batch, text))
 
     if not patches:
         return text, errors
@@ -246,8 +304,8 @@ def _collect_patch(
     node: "_ObjNode | _Span",
     path: list[str],
     value: object,
-    text: str,
     patches: list[tuple[int, int, str]],
+    insertion_batches: dict[int, _InsertionBatch],
 ) -> str | None:
     """Recursively walk *path* in *node*, collecting a patch. Returns error string or None."""
     if not path:
@@ -262,7 +320,7 @@ def _collect_patch(
     if key in node.children:
         child = node.children[key]
         if rest:
-            return _collect_patch(child, rest, value, text, patches)
+            return _collect_patch(child, rest, value, patches, insertion_batches)
         # Replace this value's span
         if isinstance(child, _Span):
             replacement = json.dumps(value, ensure_ascii=False)
@@ -281,35 +339,10 @@ def _collect_patch(
         # Key doesn't exist — insert into this object
         if rest:
             return f"Intermediate key {key!r} not found; cannot create nested path"
-        # Build insertion: find insert_before position
         insert_pos = node.insert_before
         if insert_pos == -1:
             return f"Cannot determine insertion point for key {key!r}"
-
-        # Determine indentation: find the line containing close_brace, take leading whitespace only
-        line_start = text.rfind("\n", 0, node.close_brace)
-        if line_start != -1:
-            line_content = text[line_start + 1 : node.close_brace]
-            brace_indent = ""
-            for ch in line_content:
-                if ch in (" ", "\t"):
-                    brace_indent += ch
-                else:
-                    break
-        else:
-            brace_indent = ""
-        value_indent = brace_indent + "  "
-
-        # Need a leading comma if there's existing content
-        needs_comma = bool(node.children)
-        new_entry = (
-            (",\n" if needs_comma else "\n")
-            + value_indent
-            + json.dumps(key, ensure_ascii=False)
-            + ": "
-            + json.dumps(value, ensure_ascii=False)
-        )
-        patches.append((insert_pos, insert_pos, new_entry))
+        _queue_insertion(node, key, value, insertion_batches)
         return None
 
 
