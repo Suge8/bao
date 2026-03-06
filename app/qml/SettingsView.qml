@@ -8,6 +8,7 @@ Rectangle {
     color: "transparent"
 
     property var appRoot: null
+    property bool onboardingMode: false
     property bool _pendingManualUpdateCheck: false
     property string updateStateUi: updateService ? updateService.state : "idle"
     property string updateErrorUi: updateService ? updateService.errorMessage : ""
@@ -17,7 +18,106 @@ Rectangle {
                                  ? (appRoot.uiLanguage === "zh" || (appRoot.uiLanguage === "auto" && appRoot.autoLanguage === "zh"))
                                  : false
     property var _providerList: []
+    property bool _updateAutoCheckDraft: false
+    property int _activeTab: 0
+    property string _helpTitle: ""
+    property var _helpSections: []
+    property var _tabLabels: [
+        {"label": tr("快速开始", "Quick Start")},
+        {"label": tr("渠道", "Channels")},
+        {"label": tr("高级", "Advanced")}
+    ]
+    property int _pendingTab: -1
+    property int _tabDirection: 1
+    property real _savedScrollY: -1
     property string _pendingExpandProviderName: ""
+    property var _supportedUiLanguages: ["auto", "zh", "en"]
+    property var _onboardingProviderApiKeyFieldRef: null
+    property var _onboardingProviderTypeFieldRef: null
+    property var _onboardingProviderApiBaseFieldRef: null
+    readonly property bool languageConfigured: {
+        if (!configService)
+            return false
+        var value = configService.getValue("ui.language")
+        return _isSupportedUiLanguage(value)
+    }
+    readonly property bool providerConfigured: _hasConfiguredProvider()
+    readonly property bool modelConfigured: _hasConfiguredModel()
+    readonly property var onboardingPrimaryProvider: _primaryProviderDraft()
+    readonly property string onboardingDraftModel: {
+        var field = onboardingPrimaryModelField
+        if (field && field.currentValue !== undefined && field.currentValue !== null)
+            return String(field.currentValue)
+        if (!configService)
+            return ""
+        var value = configService.getValue("agents.defaults.model")
+        return (typeof value === "string" && value !== "") ? value : ""
+    }
+    readonly property int onboardingCompletedCount: (languageConfigured ? 1 : 0)
+                                                  + (providerConfigured ? 1 : 0)
+                                                  + (modelConfigured ? 1 : 0)
+    readonly property real onboardingProgress: onboardingCompletedCount / 3
+    readonly property int onboardingStepIndex: {
+        if (!languageConfigured)
+            return 0
+        if (!providerConfigured)
+            return 1
+        return 2
+    }
+    readonly property string onboardingUiLanguage: {
+        if (!configService)
+            return "auto"
+        var value = configService.getValue("ui.language")
+        return _isSupportedUiLanguage(value) ? value : "auto"
+    }
+    readonly property var onboardingProviderPresets: [
+        {
+            "id": "openai",
+            "title": tr("OpenAI / 官方", "OpenAI / Official"),
+            "subtitle": tr("最稳妥的默认起点", "The safest default starting point"),
+            "type": "openai",
+            "name": "openai",
+            "apiBase": "",
+            "accent": isZh ? "官方" : "Official"
+        },
+        {
+            "id": "openrouter",
+            "title": "OpenRouter",
+            "subtitle": tr("一处接多模型，最省事", "One endpoint for many models"),
+            "type": "openai",
+            "name": "openrouter",
+            "apiBase": "https://openrouter.ai/api/v1",
+            "accent": tr("聚合", "Multi-model")
+        },
+        {
+            "id": "anthropic",
+            "title": tr("Claude 官方", "Official Claude"),
+            "subtitle": tr("只在直连 Anthropic 时选", "Choose only for direct Anthropic"),
+            "type": "anthropic",
+            "name": "anthropic",
+            "apiBase": "",
+            "accent": "Claude"
+        },
+        {
+            "id": "gemini",
+            "title": tr("Gemini 官方", "Official Gemini"),
+            "subtitle": tr("只在直连 Gemini 时选", "Choose only for direct Gemini"),
+            "type": "gemini",
+            "name": "gemini",
+            "apiBase": "",
+            "accent": "Gemini"
+        },
+        {
+            "id": "custom",
+            "title": tr("自定义兼容接口", "Custom compatible API"),
+            "subtitle": tr("适合代理、自建或公司网关", "Best for proxies, self-hosting, or company gateways"),
+            "type": "openai",
+            "name": "primary",
+            "apiBase": "",
+            "accent": tr("自定义", "Custom")
+        }
+    ]
+    readonly property var onboardingModelPresets: _suggestedModelPresets()
 
     function tr(zh, en) {
         return isZh ? zh : en
@@ -25,6 +125,10 @@ Rectangle {
 
     function _cloneValue(value) {
         return JSON.parse(JSON.stringify(value))
+    }
+
+    function _isSupportedUiLanguage(value) {
+        return typeof value === "string" && _supportedUiLanguages.indexOf(value) >= 0
     }
 
     function _getProviderMap() {
@@ -41,6 +145,9 @@ Rectangle {
                 used[_providerList[i].name] = true
         }
 
+        if (!used["primary"])
+            return "primary"
+
         var idx = _providerList.length + 1
         var name = "provider" + idx
         while (used[name]) {
@@ -48,28 +155,6 @@ Rectangle {
             name = "provider" + idx
         }
         return name
-    }
-
-    function _nextProviderOrder() {
-        var maxOrder = -1
-        for (var i = 0; i < _providerList.length; i++) {
-            var ord = Number(_providerList[i] && _providerList[i].order)
-            if (!isNaN(ord) && ord > maxOrder)
-                maxOrder = ord
-        }
-        return maxOrder + 1
-    }
-
-    function _providerOrderValue(original, fallbackIndex) {
-        var rawOrder = original.order
-        if (typeof rawOrder === "number") {
-            return rawOrder
-        } else if (typeof rawOrder === "string" && rawOrder.trim() !== "") {
-            var parsedOrder = Number(rawOrder)
-            if (!isNaN(parsedOrder))
-                return parsedOrder
-        }
-        return fallbackIndex
     }
 
     function _mergeUiChanges(changes) {
@@ -110,26 +195,356 @@ Rectangle {
         return msg
     }
 
-    function _saveUpdateAutoCheck(enabled) {
+    function _loadUpdateDraft() {
+        var current = configService ? configService.getValue("ui.update.autoCheck") : undefined
+        _updateAutoCheckDraft = current === true
+    }
+
+    function _rememberScrollPosition() {
+        var flick = settingsScroll && settingsScroll.contentItem ? settingsScroll.contentItem : null
+        if (flick && flick.contentY !== undefined)
+            _savedScrollY = flick.contentY
+    }
+
+    function _restoreScrollPosition() {
+        var flick = settingsScroll && settingsScroll.contentItem ? settingsScroll.contentItem : null
+        if (!flick || _savedScrollY < 0 || flick.contentY === undefined || flick.contentHeight === undefined)
+            return
+        var maxY = Math.max(0, flick.contentHeight - flick.height)
+        flick.contentY = Math.max(0, Math.min(maxY, _savedScrollY))
+        _savedScrollY = -1
+    }
+
+    function _switchTab(index) {
+        if (index === _activeTab)
+            return
+        _tabDirection = index > _activeTab ? 1 : -1
+        _pendingTab = index
+        tabSwitchAnim.restart()
+    }
+
+    function _reloadLocalState() {
+        _loadProviders()
+        _loadUpdateDraft()
+    }
+
+    function _hasConfiguredProvider() {
+        var providers = _getProviderMap()
+        for (var name in providers) {
+            var provider = providers[name]
+            if (provider && typeof provider === "object" && !Array.isArray(provider)) {
+                var apiKey = provider.apiKey
+                if (typeof apiKey === "string" && apiKey.trim() !== "")
+                    return true
+            }
+        }
+        return false
+    }
+
+    function _hasConfiguredModel() {
         if (!configService)
+            return false
+        var value = configService.getValue("agents.defaults.model")
+        return typeof value === "string" && value.trim() !== ""
+    }
+
+    function _scrollToItem(item, topOffset) {
+        if (!item || !settingsScroll || !settingsScroll.contentItem)
             return
-        var uiNode = configService.getValue("ui")
-        var nextUi = (uiNode && typeof uiNode === "object" && !Array.isArray(uiNode)) ? JSON.parse(JSON.stringify(uiNode)) : {}
-        var updateNode = (nextUi.update && typeof nextUi.update === "object" && !Array.isArray(nextUi.update))
-                        ? JSON.parse(JSON.stringify(nextUi.update)) : {}
-        updateNode.autoCheck = enabled
-        nextUi.update = updateNode
-        var ok = configService.save({"ui": nextUi})
-        if (!ok)
+        var flick = settingsScroll.contentItem
+        var top = item.mapToItem(scrollContent, 0, 0).y
+        var maxY = Math.max(0, flick.contentHeight - flick.height)
+        var offset = (topOffset !== undefined && topOffset !== null) ? topOffset : 20
+        flick.contentY = Math.max(0, Math.min(maxY, top - offset))
+    }
+
+    function _focusLanguageStep() {
+        _scrollToItem(appSection)
+    }
+
+    function _focusProviderStep() {
+        _scrollToItem(providerSection)
+    }
+
+    function _focusModelStep() {
+        _scrollToItem(onboardingModelSection)
+    }
+
+    function _openOnboardingStep(step) {
+        if (step === 0) {
+            _focusLanguageStep()
             return
+        }
+        if (step === 1) {
+            _focusProviderStep()
+            return
+        }
+        _focusModelStep()
+    }
+
+    function _applyUiLanguageChoice(value) {
+        var previous = root.appRoot ? root.appRoot.uiLanguage : onboardingUiLanguage
+        if (root.appRoot)
+            root.appRoot.uiLanguage = value
+        if (_saveImmediate({"ui": {"language": value}}))
+            return true
+        if (root.appRoot)
+            root.appRoot.uiLanguage = previous
+        return false
+    }
+
+    function _applyProviderPreset(preset) {
+        if (!preset)
+            return
+        var nextProviders = []
+        for (var i = 0; i < _providerList.length; i++)
+            nextProviders.push(_cloneValue(_providerList[i]))
+
+        var baseName = preset.name || "primary"
+        var chosenName = baseName
+        var suffix = 2
+        var currentName = nextProviders.length > 0 && nextProviders[0] ? nextProviders[0].name : ""
+        var used = {}
+        for (var j = 0; j < nextProviders.length; j++) {
+            var item = nextProviders[j]
+            if (item && item.name && item.name !== currentName)
+                used[item.name] = true
+        }
+        while (used[chosenName]) {
+            chosenName = baseName + suffix
+            suffix += 1
+        }
+
+        var providerDraft = {
+            "name": chosenName,
+            "type": preset.type || "openai",
+            "apiKey": _currentOnboardingProviderApiKey(),
+            "apiBase": preset.apiBase !== undefined ? preset.apiBase : (nextProviders.length > 0 && nextProviders[0] ? nextProviders[0].apiBase || "" : "")
+        }
+
+        if (nextProviders.length === 0)
+            nextProviders.push(providerDraft)
+        else
+            nextProviders[0] = providerDraft
+
+        _providerList = nextProviders
+    }
+
+    function _currentOnboardingProviderApiKey() {
+        if (_onboardingProviderApiKeyFieldRef && _onboardingProviderApiKeyFieldRef.currentValue !== undefined)
+            return _onboardingProviderApiKeyFieldRef.currentValue
+        if (_providerList.length > 0 && _providerList[0] && _providerList[0].apiKey)
+            return _providerList[0].apiKey
+        return ""
+    }
+
+    function _syncOnboardingProviderFields(provider) {
+        if (!root.onboardingMode || !provider)
+            return
+        if (_onboardingProviderApiKeyFieldRef)
+            _onboardingProviderApiKeyFieldRef.setCurrentText(provider.apiKey || "")
+        if (_onboardingProviderTypeFieldRef)
+            _onboardingProviderTypeFieldRef.presetValue(provider.type || "openai")
+        if (_onboardingProviderApiBaseFieldRef)
+            _onboardingProviderApiBaseFieldRef.setCurrentText(provider.apiBase || "")
+    }
+
+    function _providerDisplayName(provider) {
+        if (!provider || typeof provider !== "object")
+            return tr("服务连接", "Service connection")
+        var type = typeof provider.type === "string" ? provider.type : "openai"
+        var apiBase = typeof provider.apiBase === "string" ? provider.apiBase.toLowerCase() : ""
+        if (apiBase.indexOf("openrouter") >= 0)
+            return "OpenRouter"
+        if (type === "anthropic")
+            return tr("Claude 官方", "Official Claude")
+        if (type === "gemini")
+            return tr("Gemini 官方", "Official Gemini")
+        if (apiBase !== "")
+            return tr("自定义兼容接口", "Custom compatible API")
+        return tr("OpenAI / 官方", "OpenAI / Official")
+    }
+
+    function _primaryProviderDraft() {
+        if (_providerList.length > 0 && _providerList[0])
+            return _providerList[0]
+        return {"type": "openai", "apiBase": ""}
+    }
+
+    function _normalizeProviderApiBase(value) {
+        if (typeof value !== "string")
+            return ""
+        var normalized = value.trim().toLowerCase()
+        while (normalized.length > 0 && normalized.charAt(normalized.length - 1) === "/")
+            normalized = normalized.slice(0, normalized.length - 1)
+        if (normalized === "https://api.openai.com" || normalized === "https://api.openai.com/v1")
+            return ""
+        if (normalized === "https://openrouter.ai/api" || normalized === "https://openrouter.ai/api/v1")
+            return "https://openrouter.ai/api/v1"
+        return normalized
+    }
+
+    function _liveOnboardingProviderDraft() {
+        var provider = root.onboardingPrimaryProvider || {}
+        var providerType = typeof provider.type === "string" ? provider.type : "openai"
+        var providerApiBase = typeof provider.apiBase === "string" ? provider.apiBase : ""
+        if (_onboardingProviderTypeFieldRef && _onboardingProviderTypeFieldRef.currentValue !== undefined && _onboardingProviderTypeFieldRef.currentValue !== null)
+            providerType = String(_onboardingProviderTypeFieldRef.currentValue)
+        if (_onboardingProviderApiBaseFieldRef && _onboardingProviderApiBaseFieldRef.currentValue !== undefined && _onboardingProviderApiBaseFieldRef.currentValue !== null)
+            providerApiBase = String(_onboardingProviderApiBaseFieldRef.currentValue)
+        return {
+            "type": providerType,
+            "apiBase": _normalizeProviderApiBase(providerApiBase)
+        }
+    }
+
+    function _suggestedModelPresets() {
+        var provider = _liveOnboardingProviderDraft()
+        var type = provider && typeof provider.type === "string" ? provider.type : "openai"
+        var apiBase = provider && typeof provider.apiBase === "string" ? provider.apiBase : ""
+        if (type === "anthropic") {
+            return [
+                {"label": tr("Claude Sonnet", "Claude Sonnet"), "value": "anthropic/claude-sonnet-4-20250514", "hint": tr("最稳妥的 Claude 起点", "The safest Claude default")},
+                {"label": tr("Claude Haiku", "Claude Haiku"), "value": "anthropic/claude-3-5-haiku-latest", "hint": tr("更轻更快", "Lighter and faster")},
+                {"label": tr("自己填写", "Custom"), "value": "", "hint": tr("如果你知道自己的模型名", "If you already know your exact model name")}
+            ]
+        }
+        if (type === "gemini") {
+            return [
+                {"label": tr("Gemini Flash", "Gemini Flash"), "value": "gemini/gemini-2.0-flash", "hint": tr("推荐先从这个开始", "Recommended default")},
+                {"label": tr("Gemini Pro", "Gemini Pro"), "value": "gemini/gemini-1.5-pro", "hint": tr("更适合复杂任务", "Better for heavier tasks")},
+                {"label": tr("自己填写", "Custom"), "value": "", "hint": tr("如果你知道自己的模型名", "If you already know your exact model name")}
+            ]
+        }
+        if (apiBase.indexOf("openrouter") >= 0) {
+            return [
+                {"label": "GPT-4o", "value": "openai/gpt-4o", "hint": tr("OpenRouter 上最省心的起点", "An easy OpenRouter default")},
+                {"label": tr("Claude Sonnet", "Claude Sonnet"), "value": "anthropic/claude-sonnet-4-20250514", "hint": tr("如果你更喜欢 Claude 风格", "If you prefer Claude-style answers")},
+                {"label": tr("Gemini Flash", "Gemini Flash"), "value": "gemini/gemini-2.0-flash", "hint": tr("更快更轻量", "Faster and lighter")}
+            ]
+        }
+        return [
+            {"label": "GPT-4o", "value": "openai/gpt-4o", "hint": tr("推荐先从这个开始", "Recommended default")},
+            {"label": "GPT-4.1 mini", "value": "openai/gpt-4.1-mini", "hint": tr("更轻更快", "Lighter and faster")},
+            {"label": tr("自己填写", "Custom"), "value": "", "hint": tr("如果你有自己的模型名", "If you already have a model name")}
+        ]
+    }
+
+    function _applyModelPreset(preset) {
+        if (!preset || !onboardingPrimaryModelField)
+            return
+        if (preset.value === "") {
+            activateCustomModelInput()
+            return
+        }
+        onboardingPrimaryModelField.presetText(preset.value)
+    }
+
+    function activateCustomModelInput() {
+        if (!onboardingPrimaryModelField)
+            return
+        onboardingModelManualField.expanded = true
+        onboardingPrimaryModelField.setCurrentText("")
+        _focusModelStep()
+    }
+
+    function _displayModelLabel(modelId) {
+        if (typeof modelId !== "string" || modelId.trim() === "")
+            return tr("还没选默认聊天 AI", "No default chat AI selected yet")
+        var value = modelId.trim()
+        if (value === "openai/gpt-4o")
+            return "GPT-4o"
+        if (value === "openai/gpt-4.1-mini")
+            return "GPT-4.1 mini"
+        if (value === "anthropic/claude-sonnet-4-20250514")
+            return tr("Claude Sonnet", "Claude Sonnet")
+        if (value === "anthropic/claude-3-5-haiku-latest")
+            return tr("Claude Haiku", "Claude Haiku")
+        if (value === "gemini/gemini-2.0-flash")
+            return tr("Gemini Flash", "Gemini Flash")
+        if (value === "gemini/gemini-1.5-pro")
+            return tr("Gemini Pro", "Gemini Pro")
+        var slash = value.lastIndexOf("/")
+        return slash >= 0 ? value.slice(slash + 1) : value
+    }
+
+    function _providerPresetSelected(preset) {
+        if (!preset)
+            return false
+        var provider = root._liveOnboardingProviderDraft()
+        var providerType = typeof provider.type === "string" ? provider.type : "openai"
+        var providerApiBase = typeof provider.apiBase === "string" ? provider.apiBase : ""
+        var presetApiBase = _normalizeProviderApiBase(preset.apiBase)
+        if (preset.id === "openrouter")
+            return providerType === "openai" && providerApiBase === presetApiBase
+        if (preset.id === "custom")
+            return providerType === "openai" && providerApiBase !== "" && providerApiBase !== "https://openrouter.ai/api/v1"
+        if (preset.type === "anthropic" || preset.type === "gemini")
+            return providerType === preset.type
+        return providerType === (preset.type || "openai") && providerApiBase === presetApiBase
+    }
+
+    function _modelPresetSelected(preset) {
+        if (!preset)
+            return false
+        if (preset.value === "")
+            return onboardingPrimaryModelField && onboardingPrimaryModelField.currentValue === ""
+        return root.onboardingDraftModel === preset.value
+    }
+
+    function _commitChanges(changes) {
+        _rememberScrollPosition()
+        var ok = configService.save(changes)
+        if (!ok) {
+            _savedScrollY = -1
+            return false
+        }
+        Qt.callLater(function() { root._restoreScrollPosition() })
+        return true
+    }
+
+    function _saveChanges(changes, onSuccess) {
+        if (!configService)
+            return false
+        _mergeUiChanges(changes)
+        if (!_commitChanges(changes))
+            return false
         if (updateBridge)
             updateBridge.reloadRequested()
         toast.show(strings.settings_saved_hint, true)
+        if (onSuccess)
+            onSuccess()
+        return true
+    }
+
+    function _saveImmediate(changes, onSuccess) {
+        if (!configService)
+            return false
+        if (!_commitChanges(changes))
+            return false
+        if (onSuccess)
+            onSuccess()
+        return true
+    }
+
+    function _saveSection(sectionBody, overrides, onSuccess) {
+        var changes = {}
+        collectFields(sectionBody, changes)
+        if (overrides && typeof overrides === "object" && !Array.isArray(overrides)) {
+            for (var overrideKey in overrides)
+                changes[overrideKey] = overrides[overrideKey]
+        }
+        return _saveChanges(changes, onSuccess)
     }
 
     onUpdateStateUiChanged: {
         if (!_pendingManualUpdateCheck)
             return
+        if (updateStateUi === "available") {
+            _pendingManualUpdateCheck = false
+            updateConfirmModal.open()
+            return
+        }
         if (updateStateUi === "up_to_date") {
             toast.show(strings.update_status_up_to_date, true)
             _pendingManualUpdateCheck = false
@@ -140,10 +555,12 @@ Rectangle {
             _pendingManualUpdateCheck = false
         }
     }
+    onOnboardingPrimaryProviderChanged: _syncOnboardingProviderFields(onboardingPrimaryProvider)
 
     function _loadProviders() {
         if (!configService) return
         _providerList = configService.getProviders() || []
+        _syncOnboardingProviderFields(_primaryProviderDraft())
         if (_pendingExpandProviderName !== "") {
             Qt.callLater(function() {
                 _expandAndFocusProvider(_pendingExpandProviderName)
@@ -162,46 +579,41 @@ Rectangle {
                     return
                 }
                 item.expanded = true
-                Qt.callLater(function() { _scrollToProviderItem(item) })
+                Qt.callLater(function() { _scrollToItem(item, 12) })
                 return
             }
         }
     }
 
-    function _scrollToProviderItem(item) {
-        if (!item) return
-        var flick = settingsScroll.contentItem
-        if (!flick) return
-        var top = item.mapToItem(scrollContent, 0, 0).y
-        var maxY = Math.max(0, flick.contentHeight - flick.height)
-        var target = Math.max(0, Math.min(maxY, top - 12))
-        flick.contentY = target
-    }
-
     function _addNewProvider() {
-        if (!configService) return
         var name = _nextProviderName()
-        var providerValue = {"type": "openai", "apiKey": "", "order": _nextProviderOrder()}
-        var nextProviders = _cloneValue(_getProviderMap())
-        nextProviders[name] = providerValue
-
-        var ok = configService.save({"providers": nextProviders})
-        toast.show(ok ? strings.settings_saved_hint : strings.settings_save_failed, ok)
-        if (ok) {
-            _pendingExpandProviderName = name
-            _loadProviders()
-        }
+        var providerValue = {"type": "openai", "apiKey": ""}
+        var nextProviders = []
+        for (var i = 0; i < _providerList.length; i++)
+            nextProviders.push(_providerList[i])
+        nextProviders.push({
+            "name": name,
+            "type": providerValue.type,
+            "apiKey": providerValue.apiKey,
+            "apiBase": ""
+        })
+        _providerList = nextProviders
+        _pendingExpandProviderName = name
+        Qt.callLater(function() { root._expandAndFocusProvider(name) })
     }
 
-    function saveAll(overrides) {
-        if (!configService) return
-        var changes = {}
-        collectFields(innerCol, changes)
-        if (overrides && typeof overrides === "object" && !Array.isArray(overrides)) {
-            for (var overrideKey in overrides)
-                changes[overrideKey] = overrides[overrideKey]
+    function _removeProviderDraft(name) {
+        var nextProviders = []
+        for (var i = 0; i < _providerList.length; i++) {
+            if (_providerList[i] && _providerList[i].name !== name)
+                nextProviders.push(_providerList[i])
         }
+        _providerList = nextProviders
+    }
 
+    function _saveProvidersSection(onSuccess) {
+        var changes = {}
+        collectFields(providerSectionBody, changes)
         var allProviders = _getProviderMap()
         var seenProviderNames = {}
         var nextProviders = {}
@@ -234,7 +646,7 @@ Rectangle {
             if (merged["apiKey"] === undefined || merged["apiKey"] === null) {
                 merged["apiKey"] = (original.apiKey !== undefined && original.apiKey !== null) ? original.apiKey : ""
             }
-            merged["order"] = _providerOrderValue(merged, i)
+            delete merged["order"]
 
             var fieldNames = ["type", "apiKey", "apiBase"]
             for (var j = 0; j < fieldNames.length; j++) {
@@ -248,23 +660,123 @@ Rectangle {
 
             nextProviders[newName] = merged
         }
-        changes["providers"] = nextProviders
-
-        var toDelete = []
-        for (var k in changes) {
-            if (k.startsWith("_prov_") || k.startsWith("_new_prov_")) toDelete.push(k)
-        }
-        for (var d = 0; d < toDelete.length; d++) delete changes[toDelete[d]]
-
-        _mergeUiChanges(changes)
-
-        var ok = configService.save(changes)
-        if (ok) {
-            if (updateBridge)
-                updateBridge.reloadRequested()
-            toast.show(strings.settings_saved_hint, true)
+        return _saveChanges({"providers": nextProviders}, function() {
             root._loadProviders()
-        }
+            if (onSuccess)
+                onSuccess()
+        })
+    }
+
+    function saveOnboardingProviderStep() {
+        return _saveProvidersSection(function() {
+            if (root.onboardingMode)
+                root._focusModelStep()
+        })
+    }
+
+    function _openHelp(title, sections) {
+        _helpTitle = title
+        _helpSections = sections
+        helpModal.open()
+    }
+
+    function _providerHelpSections() {
+        return [
+            {
+                "title": tr("先完成这 3 项", "Start with these 3 items"),
+                "body": tr(
+                    "1. 先选一个 AI 服务预设。\n2. 大多数平台保持 openai；只有直连 Claude 或 Gemini 官方时再改。\n3. 填好 API Key，再到下一步选默认聊天 AI。",
+                    "1. Start with one AI service preset.\n2. Keep openai for most services; only switch when using the official Claude or Gemini endpoints.\n3. Enter the API key, then move to the next step and choose the default chat AI."
+                )
+            },
+            {
+                "title": tr("每个字段是什么意思", "What each field means"),
+                "body": tr(
+                    "名称：你自己起的别名，只是给配置里区分用途。\n类型：决定 Bao 用哪套 SDK 协议。大多数第三方都选 openai。\nAPI 密钥：平台发给你的密钥，通常在 API Keys 页面生成。\nAPI 地址：官方或代理的基础地址；用官方默认就留空。",
+                    "Name: your local alias in the config.\nType: selects the SDK protocol Bao should use. Most third-party services use openai.\nAPI Key: the secret generated by the platform, usually from an API Keys page.\nAPI Base URL: the official or proxy base endpoint; leave empty for the official default."
+                )
+            },
+            {
+                "title": tr("常见提供商怎么拿 Key", "Where to get common provider keys"),
+                "body": tr(
+                    "OpenAI：去 platform.openai.com → API Keys。\nAnthropic：去 console.anthropic.com → API Keys。\nGemini：去 aistudio.google.com → Get API key。\nOpenRouter：去 openrouter.ai/keys。\n如果你用硅基流动、DeepSeek、Groq、火山、DashScope、Moonshot、LM Studio、Ollama 之类，通常都按 openai 类型填写，并把它们提供的接口地址填到 API 地址。",
+                    "OpenAI: platform.openai.com → API Keys.\nAnthropic: console.anthropic.com → API Keys.\nGemini: aistudio.google.com → Get API key.\nOpenRouter: openrouter.ai/keys.\nFor SiliconFlow, DeepSeek, Groq, Volcengine, DashScope, Moonshot, LM Studio, Ollama, and similar services, keep the type as openai and put their endpoint into API Base URL."
+                )
+            },
+            {
+                "title": tr("模型名怎么填", "How to fill model names"),
+                "body": tr(
+                    "默认聊天 AI 在 onboarding 第 3 步里选。最简单的方式是先点推荐卡片；如果你走代理平台，再按那个平台要求的模型名手动填写。",
+                    "The default chat AI is chosen in onboarding step 3. The easiest path is using one of the recommended cards first; when you use a proxy or aggregator, manually enter the exact model name required by that service."
+                )
+            }
+        ]
+    }
+
+    function _channelHelpSections() {
+        return [
+            {
+                "title": tr("怎么启用一个渠道", "How to enable a channel"),
+                "body": tr(
+                    "先展开你要接入的渠道，填完必需字段，再打开开关并点击本卡保存。保存后重启网关生效。\n如果只是想先聊天，不需要立刻配所有渠道。新用户通常先配 Provider + 主模型就够了。",
+                    "Expand one channel, fill the required fields, then turn it on and save that section. Restart the gateway after saving.\nIf you only want to start chatting, you do not need every channel right away. New users usually only need a provider plus a primary model."
+                )
+            },
+            {
+                "title": "Telegram / Discord / Slack",
+                "body": tr(
+                    "Telegram：去 @BotFather 创建机器人，拿到 Bot Token。\nDiscord：去 Discord Developer Portal 创建应用和 Bot，开启 Message Content Intent，拿 Bot Token。\nSlack：去 api.slack.com 创建 App，安装到工作区后拿 Bot Token；如果用 Socket Mode，还要再拿 App Token。",
+                    "Telegram: create a bot via @BotFather and copy the Bot Token.\nDiscord: create an app in Discord Developer Portal, enable Message Content Intent, then copy the Bot Token.\nSlack: create an app on api.slack.com, install it to your workspace, copy the Bot Token, and add an App Token if you use Socket Mode."
+                )
+            },
+            {
+                "title": tr("WhatsApp / 飞书 / 钉钉 / QQ", "WhatsApp / Feishu / DingTalk / QQ"),
+                "body": tr(
+                    "WhatsApp：先部署 bridge，再把 bridge 地址填到 Bridge URL；如果 bridge 配了鉴权，再填 Bridge Token。\n飞书：去飞书开放平台创建应用，拿 App ID / App Secret；如启用事件订阅，再按后台提示配置 Encrypt Key / Verification Token。\n钉钉：去钉钉开放平台创建应用，拿 Client ID / Client Secret。\nQQ：去 QQ 开放平台创建机器人或应用，拿 App ID / Secret。",
+                    "WhatsApp: deploy the bridge first, then enter its Bridge URL; fill Bridge Token only if the bridge requires auth.\nFeishu: create an app in the Feishu developer console and copy App ID / App Secret; add Encrypt Key / Verification Token when event subscriptions require them.\nDingTalk: create an app in DingTalk Open Platform and copy Client ID / Client Secret.\nQQ: create the bot/app in the QQ developer platform and copy App ID / Secret."
+                )
+            },
+            {
+                "title": tr("Email / iMessage / Mochat", "Email / iMessage / Mochat"),
+                "body": tr(
+                    "Email：准备好 IMAP/SMTP 地址、端口、用户名和密码；很多邮箱需要单独开启 IMAP，或使用应用专用密码。\niMessage：仅 macOS 可用，通常不需要 Key，只要设置轮询间隔、服务名和允许列表。\nMochat：按你自己的 Mochat/Claw 部署文档填写 Base URL、Token 和 Agent User ID。",
+                    "Email: prepare IMAP/SMTP hosts, ports, usernames, and passwords; many providers require IMAP to be enabled or an app password.\niMessage: macOS only; usually no key is needed, only poll interval, service name, and allowlist.\nMochat: follow your own Mochat/Claw deployment docs for Base URL, Token, and Agent User ID."
+                )
+            },
+            {
+                "title": tr("Allow From 是什么", "What Allow From means"),
+                "body": tr(
+                    "Allow From 是白名单。只有列表里的用户、群组或邮箱可以和 Bao 通信。拿不准时可以先留空，确认跑通后再逐步收紧。",
+                    "Allow From is the allowlist. Only the users, groups, or email addresses in the list can talk to Bao. If you are unsure, leave it empty first and lock it down after everything works."
+                )
+            }
+        ]
+    }
+
+    function _agentHelpSections() {
+        return [
+            {
+                "title": tr("这一块是干什么的", "What this section does"),
+                "body": tr(
+                    "这里决定 Bao 默认用哪个模型、怎么回复，以及新会话里默认启用哪些能力。你先填主模型就能开始聊天，其它项都可以之后再细调。",
+                    "This section decides which model Bao uses by default, how it responds, and which abilities new chats start with. Filling the primary model is enough to get started; everything else can be tuned later."
+                )
+            },
+            {
+                "title": tr("最重要的是哪几项", "Which fields matter most"),
+                "body": tr(
+                    "主模型：最重要，Bao 平时聊天主要用它。\n轻量模型：做标题生成、经验提取这类后台小任务时更省钱。\n模型列表：聊天里可切换的候选模型，不填也能正常使用。",
+                    "Primary Model: the most important field; Bao uses it for normal conversations.\nUtility Model: a cheaper model for background tasks such as title generation or experience extraction.\nModels: optional quick-switch choices available in chat; Bao still works if you leave this empty."
+                )
+            },
+            {
+                "title": tr("哪些先别动", "What to leave alone at first"),
+                "body": tr(
+                    "如果你是第一次配置，温度、最大 Token、上下文管理、推理强度这些先保持默认就好。等你已经能稳定聊天，再根据效果慢慢调。",
+                    "If this is your first setup, leave Temperature, Max Tokens, Context Management, and Reasoning Effort at their defaults. Once chat works reliably, tune them based on the results you want."
+                )
+            }
+        ]
     }
 
     function collectFields(item, changes) {
@@ -288,7 +800,7 @@ Rectangle {
         }
     }
 
-    Component.onCompleted: _loadProviders()
+    Component.onCompleted: _reloadLocalState()
 
     WheelHandler {
         id: settingsWheelProxy
@@ -305,6 +817,56 @@ Rectangle {
             if (nextY > maxY) nextY = maxY
             flick.contentY = nextY
             event.accepted = true
+        }
+    }
+
+    SequentialAnimation {
+        id: tabSwitchAnim
+        ParallelAnimation {
+            NumberAnimation {
+                target: pagesWrap
+                property: "opacity"
+                to: 0.12
+                duration: 110
+                easing.type: easeStandard
+            }
+            NumberAnimation {
+                target: pagesWrap
+                property: "x"
+                to: -root._tabDirection * 30
+                duration: 110
+                easing.type: easeStandard
+            }
+        }
+        ScriptAction {
+            script: {
+                if (root._pendingTab >= 0) {
+                    root._activeTab = root._pendingTab
+                    pagesWrap.x = root._tabDirection * 30
+                }
+            }
+        }
+        ParallelAnimation {
+            NumberAnimation {
+                target: pagesWrap
+                property: "opacity"
+                to: 1
+                duration: 200
+                easing.type: easeEmphasis
+            }
+            NumberAnimation {
+                target: pagesWrap
+                property: "x"
+                to: 0
+                duration: 200
+                easing.type: easeEmphasis
+            }
+        }
+        ScriptAction {
+            script: {
+                root._pendingTab = -1
+                pagesWrap.x = 0
+            }
         }
     }
 
@@ -328,51 +890,515 @@ Rectangle {
                 height: implicitHeight
                 anchors.horizontalCenter: parent.horizontalCenter
                 anchors.top: parent.top
-                anchors.topMargin: 72
-                spacing: spacingXl
+                anchors.topMargin: root.onboardingMode ? 22 : 32
+                spacing: root.onboardingMode ? spacingLg : spacingXl
+
+                Rectangle {
+                    visible: !root.onboardingMode
+                    Layout.fillWidth: true
+                    implicitHeight: 46
+                    radius: 23
+                    color: isDark ? "#12FFFFFF" : "#08000000"
+                    border.color: borderSubtle
+                    border.width: 1
+
+                    readonly property real tabSpacing: 6
+                    readonly property real trackPadding: 6
+                    readonly property real segmentWidth: (width - (trackPadding * 2) - (tabSpacing * (_tabLabels.length - 1))) / _tabLabels.length
+
+                    Rectangle {
+                        id: tabHighlight
+                        y: 6
+                        height: parent.height - 12
+                        width: parent.segmentWidth
+                        x: 6 + (parent.segmentWidth + parent.tabSpacing) * root._activeTab
+                        radius: height / 2
+                        color: accent
+
+                        Behavior on x { NumberAnimation { duration: 220; easing.type: easeEmphasis } }
+                        Behavior on width { NumberAnimation { duration: 220; easing.type: easeStandard } }
+                    }
+
+                    RowLayout {
+                        anchors.fill: parent
+                        anchors.margins: 6
+                        spacing: parent.tabSpacing
+
+                        Repeater {
+                            model: root._tabLabels
+
+                            delegate: Rectangle {
+                                required property int index
+                                required property var modelData
+
+                                Layout.fillWidth: true
+                                Layout.fillHeight: true
+                                color: tabHover.containsMouse && root._activeTab !== index
+                                       ? (isDark ? "#10FFFFFF" : "#08000000")
+                                       : "transparent"
+                                radius: 17
+
+                                Behavior on color { ColorAnimation { duration: motionFast; easing.type: easeStandard } }
+
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: modelData.label
+                                    color: root._activeTab === index ? "#FFFFFFFF" : textSecondary
+                                    font.pixelSize: typeLabel
+                                    font.weight: Font.DemiBold
+                                }
+
+                                MouseArea {
+                                    id: tabHover
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: root._switchTab(index)
+                                }
+                            }
+                        }
+                    }
+                }
+
+                ColumnLayout {
+                    id: pagesWrap
+                    Layout.fillWidth: true
+                    spacing: spacingXl
 
                 SettingsSection {
+                    id: onboardingHeroSection
                     Layout.fillWidth: true
-                    visible: configService && configService.needsSetup
-                    title: tr("开始前先完成这 3 步", "Finish these 3 steps first")
+                    visible: root.onboardingMode
+                    title: tr("三步开始和 Bao 聊天", "Three quick steps to start chatting with Bao")
+                    description: tr(
+                        "首次使用只保留一条线：先选界面语言，再连一个 AI 服务，最后确认默认模型。完成后会自动进入聊天界面。",
+                        "First launch now follows one path: choose your UI language, connect one AI service, then confirm the default model. Once done, the app drops you straight into chat."
+                    )
 
                     ColumnLayout {
                         width: parent.width
-                        spacing: 10
+                        spacing: spacingMd
 
-                        Text {
+                        CalloutPanel {
                             Layout.fillWidth: true
-                            text: tr("1. 先添加一个可用的 Provider，并填入 API Key。", "1. Add a working provider and enter its API key.")
-                            color: textPrimary
-                            font.pixelSize: typeBody
-                            wrapMode: Text.WordWrap
+                            radius: radiusLg
+                            padding: 14
+                            panelColor: isDark ? "#12FFB33D" : "#10FFB33D"
+                            panelBorderColor: isDark ? "#28FFD699" : "#20D0892C"
+                            overlayVisible: true
+                            overlayColor: isDark ? "#08FFFFFF" : "#10FFFFFF"
+                            sideGlowVisible: true
+                            sideGlowColor: isDark ? "#10FFFFFF" : "#0EFFFFFF"
+                            sideGlowWidthFactor: 0.3
+                            accentBlobVisible: true
+                            accentBlobColor: isDark ? "#14FFD699" : "#10FFD699"
+                            accentBlobWidthFactor: 0.2
+
+                            ColumnLayout {
+                                id: onboardingIntroCol
+                                width: parent.width
+                                spacing: 8
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 10
+
+                                    Rectangle {
+                                        implicitWidth: introBadge.implicitWidth + 18
+                                        implicitHeight: 28
+                                        radius: 14
+                                        color: accent
+
+                                        Text {
+                                            id: introBadge
+                                            anchors.centerIn: parent
+                                            text: tr("新用户引导", "New user flow")
+                                            color: "#FFFFFFFF"
+                                            font.pixelSize: typeMeta
+                                            font.weight: Font.DemiBold
+                                            font.letterSpacing: letterWide
+                                        }
+                                    }
+
+                                    Item { Layout.fillWidth: true }
+
+                                    Text {
+                                        text: onboardingCompletedCount + "/3"
+                                        color: textSecondary
+                                        font.pixelSize: typeLabel
+                                        font.weight: weightDemiBold
+                                    }
+                                }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 16
+
+                                    ColumnLayout {
+                                        Layout.fillWidth: true
+                                        spacing: 8
+
+                                        Text {
+                                            Layout.fillWidth: true
+                                            text: tr("把 Bao 准备好，马上就能开始聊天", "Get Bao ready and start chatting in a minute")
+                                            color: textPrimary
+                                            font.pixelSize: typeTitle + 1
+                                            font.weight: Font.Bold
+                                            wrapMode: Text.WordWrap
+                                        }
+
+                                        Text {
+                                            Layout.fillWidth: true
+                                            text: tr("先选语言，再选一个 AI 服务，最后确认默认模型。做完就能直接开始聊天。", "Choose your language, pick one AI service, then confirm the default model. After that, you can start chatting right away.")
+                                            color: textPrimary
+                                            font.pixelSize: typeBody
+                                            font.weight: weightMedium
+                                            wrapMode: Text.WordWrap
+                                        }
+
+                                        Flow {
+                                            width: parent.width
+                                            spacing: spacingSm
+
+                                            Repeater {
+                                                model: [
+                                                    tr("预计 1 分钟", "About 1 minute"),
+                                                    tr("只要 1 个 AI 服务", "Only 1 AI service needed"),
+                                                    tr("完成后自动进入聊天", "Auto-enters chat when done")
+                                                ]
+
+                                                delegate: Rectangle {
+                                                    required property string modelData
+                                                    implicitWidth: chipLabel.implicitWidth + 18
+                                                    implicitHeight: 28
+                                                    radius: 14
+                                                    color: isDark ? "#12FFFFFF" : "#10FFFFFF"
+                                                    border.color: isDark ? "#18FFFFFF" : "#12000000"
+                                                    border.width: 1
+
+                                                    Text {
+                                                        id: chipLabel
+                                                        anchors.centerIn: parent
+                                                        text: modelData
+                                                        color: textSecondary
+                                                        font.pixelSize: typeMeta
+                                                        font.weight: Font.DemiBold
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    Rectangle {
+                                        Layout.alignment: Qt.AlignTop
+                                        Layout.preferredWidth: 92
+                                        Layout.preferredHeight: 92
+                                        radius: 46
+                                        color: isDark ? "#0DFFFFFF" : "#10FFFFFF"
+                                        border.color: isDark ? "#18FFFFFF" : "#14FFFFFF"
+                                        border.width: 1
+
+                                        Rectangle {
+                                            width: 66
+                                            height: 66
+                                            radius: 33
+                                            anchors.centerIn: parent
+                                            color: isDark ? "#18FFB33D" : "#14FFB33D"
+                                        }
+
+                                        Image {
+                                            anchors.centerIn: parent
+                                            width: 52
+                                            height: 52
+                                            source: "../resources/logo-circle.png"
+                                            fillMode: Image.PreserveAspectFit
+                                            smooth: true
+                                            antialiasing: true
+                                        }
+                                    }
+                                }
+
+                                Rectangle {
+                                    Layout.fillWidth: true
+                                    height: 8
+                                    radius: 4
+                                    color: isDark ? "#10FFFFFF" : "#10000000"
+
+                                    Rectangle {
+                                        height: parent.height
+                                        width: parent.width * onboardingProgress
+                                        radius: parent.radius
+                                        color: accent
+                                        Behavior on width { NumberAnimation { duration: motionPanel; easing.type: easeEmphasis } }
+                                    }
+                                }
+                            }
                         }
-                        Text {
-                            Layout.fillWidth: true
-                            text: tr("2. 在“代理默认设置”里填写主模型名。", "2. Enter the primary model in Agent Defaults.")
-                            color: textPrimary
-                            font.pixelSize: typeBody
-                            wrapMode: Text.WordWrap
-                        }
-                        Text {
-                            Layout.fillWidth: true
-                            text: tr("3. 点击右上角保存；保存成功后会自动进入聊天界面。", "3. Click Save in the top-right; after a successful save, the app will enter chat automatically.")
-                            color: textPrimary
-                            font.pixelSize: typeBody
-                            wrapMode: Text.WordWrap
+
+                        Flow {
+                            id: onboardingStepsFlow
+                            width: parent.width
+                            spacing: spacingMd
+
+                            Repeater {
+                                model: [
+                                    {
+                                        "step": 0,
+                                        "title": tr("界面语言", "UI language"),
+                                        "body": tr("先把界面切到你读起来最舒服的语言。", "Start by switching the interface to the language that feels natural to you."),
+                                        "cta": tr("去选择", "Choose"),
+                                        "done": root.languageConfigured,
+                                        "current": root.onboardingStepIndex === 0
+                                    },
+                                    {
+                                        "step": 1,
+                                        "title": tr("选择 AI 服务", "Choose an AI service"),
+                                        "body": tr("只要连好一个能用的服务和 API Key，就能继续下一步。", "You only need one working service and API key to move on."),
+                                        "cta": tr("去连接", "Connect it"),
+                                        "done": root.providerConfigured,
+                                        "current": root.onboardingStepIndex === 1
+                                    },
+                                    {
+                                        "step": 2,
+                                        "title": tr("确认默认模型", "Confirm the default model"),
+                                        "body": tr("选一个默认模型，保存后会自动回到聊天界面。", "Choose the default model and the app will drop you into chat after saving."),
+                                        "cta": tr("去确认", "Confirm it"),
+                                        "done": root.modelConfigured,
+                                        "current": root.onboardingStepIndex === 2
+                                    }
+                                ]
+
+                                delegate: Rectangle {
+                                    required property var modelData
+
+                                    readonly property bool done: modelData.done === true
+                                    readonly property bool current: modelData.current === true
+                                    readonly property bool compact: onboardingStepsFlow.width < 720
+
+                                    width: compact
+                                           ? onboardingStepsFlow.width
+                                           : Math.floor((onboardingStepsFlow.width - (onboardingStepsFlow.spacing * 2)) / 3)
+                                    implicitHeight: stepCardCol.implicitHeight + 28
+                                    radius: radiusLg
+                                    color: current
+                                           ? (isDark ? "#18FFB33D" : "#14FFB33D")
+                                           : (done ? (isDark ? "#10FFFFFF" : "#0A000000") : (isDark ? "#0DFFFFFF" : "#05000000"))
+                                    border.color: current ? accent : (done ? (isDark ? "#24FFD699" : "#22D0892C") : borderSubtle)
+                                    border.width: current ? 1.3 : 1
+                                    scale: current ? motionSelectionScaleActive : (done ? motionSelectionScaleHover : 1.0)
+
+                                    Behavior on color { ColorAnimation { duration: motionUi; easing.type: easeStandard } }
+                                    Behavior on border.color { ColorAnimation { duration: motionUi; easing.type: easeStandard } }
+                                    Behavior on scale { NumberAnimation { duration: motionPanel; easing.type: easeEmphasis } }
+
+                                    Rectangle {
+                                        width: 34
+                                        height: 34
+                                        radius: 17
+                                        anchors.top: parent.top
+                                        anchors.right: parent.right
+                                        anchors.topMargin: 14
+                                        anchors.rightMargin: 14
+                                        color: done ? accent : "transparent"
+                                        border.color: done ? accent : (current ? accent : borderSubtle)
+                                        border.width: current || !done ? 1.2 : 0
+                                        opacity: done ? 1.0 : 0.92
+
+                                        Text {
+                                            anchors.centerIn: parent
+                                            text: done ? "OK" : String(modelData.step + 1)
+                                            color: done ? "#FFFFFFFF" : (current ? accent : textSecondary)
+                                            font.pixelSize: typeLabel
+                                            font.weight: Font.DemiBold
+                                        }
+                                    }
+
+                                    Rectangle {
+                                        visible: current && !done
+                                        width: 42
+                                        height: 42
+                                        radius: 21
+                                        anchors.top: parent.top
+                                        anchors.right: parent.right
+                                        anchors.topMargin: 10
+                                        anchors.rightMargin: 10
+                                        color: accent
+                                        opacity: 0.0
+                                        scale: 0.86
+
+                                        SequentialAnimation on opacity {
+                                            loops: Animation.Infinite
+                                            running: parent.visible
+                                            NumberAnimation { from: 0.0; to: 0.16; duration: motionStatusPulse; easing.type: easeStandard }
+                                            NumberAnimation { from: 0.16; to: 0.0; duration: motionStatusPulse; easing.type: easeSoft }
+                                        }
+                                        SequentialAnimation on scale {
+                                            loops: Animation.Infinite
+                                            running: parent.visible
+                                            NumberAnimation { from: 0.86; to: 1.06; duration: motionStatusPulse; easing.type: easeEmphasis }
+                                            NumberAnimation { from: 1.06; to: 0.86; duration: motionStatusPulse; easing.type: easeSoft }
+                                        }
+                                    }
+
+                                    ColumnLayout {
+                                        id: stepCardCol
+                                        anchors.left: parent.left
+                                        anchors.right: parent.right
+                                        anchors.top: parent.top
+                                        anchors.margins: 14
+                                        spacing: 10
+
+                                        Text {
+                                            Layout.fillWidth: true
+                                            text: done ? tr("已完成", "Done") : (current ? tr("现在就做", "Do this now") : tr("接下来", "Up next"))
+                                            color: current ? accent : textTertiary
+                                            font.pixelSize: typeMeta
+                                            font.weight: Font.DemiBold
+                                            font.letterSpacing: letterWide
+                                        }
+
+                                        Text {
+                                            Layout.fillWidth: true
+                                            text: modelData.title
+                                            color: textPrimary
+                                            font.pixelSize: typeBody
+                                            font.weight: Font.DemiBold
+                                            wrapMode: Text.WordWrap
+                                        }
+
+                                        Text {
+                                            Layout.fillWidth: true
+                                            text: modelData.body
+                                            color: textSecondary
+                                            font.pixelSize: typeLabel
+                                            wrapMode: Text.WordWrap
+                                            lineHeight: 1.2
+                                        }
+
+                                        Rectangle {
+                                            implicitWidth: stepActionLabel.implicitWidth + 22
+                                            implicitHeight: 32
+                                            radius: 16
+                                            color: current ? accent : (done ? (isDark ? "#14FFFFFF" : "#10000000") : "transparent")
+                                            border.color: current ? accent : borderSubtle
+                                            border.width: current ? 0 : 1
+
+                                            Text {
+                                                id: stepActionLabel
+                                                anchors.centerIn: parent
+                                                text: modelData.cta
+                                                color: current ? "#FFFFFFFF" : (done ? textPrimary : textSecondary)
+                                                font.pixelSize: typeMeta
+                                                font.weight: Font.DemiBold
+                                            }
+                                        }
+                                    }
+
+                                    MouseArea {
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: root._openOnboardingStep(modelData.step)
+                                    }
+                                }
+                            }
                         }
                     }
                 }
 
                 SettingsSection {
+                    id: appSection
                     Layout.fillWidth: true
-                    title: strings.section_app
+                    visible: root.onboardingMode || root._activeTab === 0
+                    spotlight: root.onboardingMode && root.onboardingStepIndex === 0
+                    title: root.onboardingMode ? tr("第 1 步 · 选择界面语言", "Step 1 · Choose your language") : strings.section_app
+                    description: root.onboardingMode
+                                 ? tr("这一步只决定界面看起来像中文还是 English，不影响后面的模型配置。", "This only changes how the app reads visually; it does not affect model setup.")
+                                 : tr("先处理界面语言这类最直接的项目。", "Start with the most direct app-level preferences such as UI language.")
 
                     ColumnLayout {
+                        id: appSectionBody
                         width: parent.width
                         spacing: 10
 
+                        Text {
+                            visible: root.onboardingMode
+                            Layout.fillWidth: true
+                            text: tr("选完会立刻生效，你后面随时还能改。", "The change applies immediately and you can switch again any time.")
+                            color: textTertiary
+                            font.pixelSize: typeMeta
+                            wrapMode: Text.WordWrap
+                        }
+
+                        Flow {
+                            visible: root.onboardingMode
+                            width: parent.width
+                            spacing: spacingSm
+
+                            Repeater {
+                                model: [
+                                    {
+                                        "value": "auto",
+                                        "title": strings.ui_language_auto,
+                                        "body": tr("跟着你的系统语言走，最省事。", "Follow your system language for the easiest start."),
+                                        "accent": tr("推荐", "Recommended")
+                                    },
+                                    {
+                                        "value": "zh",
+                                        "title": strings.ui_language_zh,
+                                        "body": tr("界面固定显示中文。", "Keep the interface in Chinese."),
+                                        "accent": "ZH"
+                                    },
+                                    {
+                                        "value": "en",
+                                        "title": strings.ui_language_en,
+                                        "body": tr("Keep the interface in English.", "Keep the interface in English."),
+                                        "accent": "EN"
+                                    }
+                                ]
+
+                                delegate: ChoiceCard {
+                                    required property var modelData
+                                    readonly property bool selectedCard: root.onboardingUiLanguage === modelData.value
+
+                                    width: Math.max(170, Math.floor((appSectionBody.width - (spacingSm * 2)) / 3))
+                                    badgeText: modelData.accent || ""
+                                    title: modelData.title || ""
+                                    description: modelData.body || ""
+                                    trailingText: selectedCard ? tr("当前使用", "Selected") : ""
+                                    selected: selectedCard
+                                    onClicked: root._applyUiLanguageChoice(modelData.value)
+                                }
+                            }
+                        }
+
+                        SettingsCollapsible {
+                            visible: root.onboardingMode
+                            Layout.fillWidth: true
+                            title: tr("手动选择语言", "Choose language manually")
+
+                            ColumnLayout {
+                                width: parent.width
+                                spacing: spacingMd
+
+                                SettingsSelect {
+                                    label: strings.ui_language
+                                    dotpath: "ui.language"
+                                    options: [
+                                        {"label": strings.ui_language_auto, "value": "auto"},
+                                        {"label": strings.ui_language_zh, "value": "zh"},
+                                        {"label": strings.ui_language_en, "value": "en"}
+                                    ]
+                                    onValueChanged: function(v) {
+                                        if (!_applyUiLanguageChoice(v))
+                                            presetValue(root.onboardingUiLanguage)
+                                    }
+                                }
+                            }
+                        }
+
                         SettingsSelect {
+                            visible: !root.onboardingMode
                             label: strings.ui_language
                             dotpath: "ui.language"
                             options: [
@@ -381,20 +1407,28 @@ Rectangle {
                                 {"label": strings.ui_language_en, "value": "en"}
                             ]
                             onValueChanged: function(v) {
-                                if (root.appRoot) root.appRoot.uiLanguage = v
-                                if (configService && configService.isValid) {
-                                    configService.save({"ui": {"language": v}})
-                                }
+                                if (!_applyUiLanguageChoice(v))
+                                    presetValue(root.onboardingUiLanguage)
                             }
                         }
                     }
                 }
 
                 SettingsSection {
+                    id: updatesSection
                     Layout.fillWidth: true
+                    visible: !root.onboardingMode && root._activeTab === 2
                     title: strings.section_updates
+                    description: tr("这里控制桌面 App 自己的更新检查，不影响聊天功能。", "These options control desktop app updates and do not affect chat behavior.")
+                    actionText: strings.settings_save
+                    actionHandler: function() {
+                        root._saveSection(updatesSectionBody, {"ui.update.autoCheck": root._updateAutoCheckDraft}, function() {
+                            root._loadUpdateDraft()
+                        })
+                    }
 
                     RowLayout {
+                        id: updatesSectionBody
                         width: parent.width
                         Layout.fillWidth: true
                         spacing: 14
@@ -409,38 +1443,9 @@ Rectangle {
                                 font.weight: weightMedium
                             }
 
-                            Rectangle {
-                                id: toggle
-                                width: 44
-                                height: 24
-                                radius: 12
-                                color: autoUpdateOn ? accent : (isDark ? "#252538" : "#D1D5DB")
-                                scale: autoUpdateOn ? motionHoverScaleSubtle : 1.0
-                                property bool autoUpdateOn: {
-                                    var current = configService ? configService.getValue("ui.update.autoCheck") : undefined
-                                    return current === true
-                                }
-                                Behavior on color { ColorAnimation { duration: motionUi; easing.type: easeStandard } }
-                                Behavior on scale { NumberAnimation { duration: motionUi; easing.type: easeEmphasis } }
-
-                                Rectangle {
-                                    width: 18
-                                    height: 18
-                                    radius: 9
-                                    color: "#FFFFFF"
-                                    anchors.verticalCenter: parent.verticalCenter
-                                    x: toggle.autoUpdateOn ? parent.width - width - 3 : 3
-                                    Behavior on x { SmoothedAnimation { velocity: motionTrackVelocity; duration: motionUi } }
-                                }
-
-                                MouseArea {
-                                    anchors.fill: parent
-                                    hoverEnabled: true
-                                    acceptedButtons: Qt.LeftButton
-                                    scrollGestureEnabled: false
-                                    cursorShape: Qt.PointingHandCursor
-                                    onClicked: root._saveUpdateAutoCheck(!toggle.autoUpdateOn)
-                                }
+                            ToggleSwitch {
+                                checked: root._updateAutoCheckDraft
+                                onToggled: function(checked) { root._updateAutoCheckDraft = checked }
                             }
                         }
 
@@ -460,19 +1465,37 @@ Rectangle {
                             }
 
                             Rectangle {
-                                implicitWidth: checkLabel.implicitWidth + 28
+                                implicitWidth: checkRow.implicitWidth + 28
                                 implicitHeight: 30
                                 radius: 15
                                 color: updateAction.containsMouse ? accentHover : accent
                                 opacity: root.updateBusy ? 0.72 : 1.0
 
-                                Text {
-                                    id: checkLabel
+                                Row {
+                                    id: checkRow
                                     anchors.centerIn: parent
-                                    text: root.updateActionText
-                                    color: "#FFFFFFFF"
-                                    font.pixelSize: typeLabel
-                                    font.weight: Font.DemiBold
+                                    spacing: 7
+
+                                    LoadingOrbit {
+                                        width: 14
+                                        height: 14
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        running: root.updateBusy
+                                        color: "#FFFFFFFF"
+                                        secondaryColor: "#AAFFFFFF"
+                                        haloColor: "#44FFFFFF"
+                                        haloOpacity: 0.12
+                                        showCore: false
+                                    }
+
+                                    Text {
+                                        id: checkLabel
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        text: root.updateActionText
+                                        color: "#FFFFFFFF"
+                                        font.pixelSize: typeLabel
+                                        font.weight: Font.DemiBold
+                                    }
                                 }
 
                                 MouseArea {
@@ -492,18 +1515,28 @@ Rectangle {
                 }
 
                 SettingsSection {
+                    id: agentSection
                     Layout.fillWidth: true
+                    visible: !root.onboardingMode && root._activeTab === 0
                     title: strings.section_agent_defaults
+                    description: tr("先填一个主模型，Bao 就能开始聊天；下面这些只是默认回复习惯。", "Set one primary model first; the rest only shapes Bao's default reply behavior.")
+                    actionText: strings.settings_save
+                    actionHandler: function() { root._saveSection(agentSectionBody) }
+                    helpVisible: true
+                    helpHandler: function() {
+                        root._openHelp(tr("回复方式与模型说明", "Response Setup Guide"), root._agentHelpSections())
+                    }
 
                     ColumnLayout {
+                        id: agentSectionBody
                         width: parent.width
                         spacing: spacingMd
 
-                        SettingsField { label: tr("工作目录", "Workspace"); dotpath: "agents.defaults.workspace"; placeholder: "~/.bao/workspace" }
-                        SettingsField { label: tr("主模型", "Model"); dotpath: "agents.defaults.model"; placeholder: "openai/gpt-4o" }
-                        SettingsField { label: tr("轻量模型", "Utility Model"); dotpath: "agents.defaults.utilityModel"; placeholder: "openrouter/google/gemini-flash-1.5"; description: tr("后台任务用的轻量模型（经验提取、标题生成等）", "Lightweight model for background tasks (experience extraction, title generation)") }
-                        SettingsField { label: tr("经验模型", "Experience Model"); dotpath: "agents.defaults.experienceModel"; placeholder: "utility / main / none"; description: tr("utility = 用轻量模型 / main = 用主模型 / none = 关闭", "utility = use utility model / main = use primary model / none = disabled") }
-                        SettingsListField { label: tr("模型列表", "Models"); dotpath: "agents.defaults.models"; placeholder: "model1, model2"; description: tr("聊天中可通过 /model 命令切换的模型", "Models available for switching via /model command") }
+                        SettingsField { label: tr("工作目录", "Workspace Folder"); dotpath: "agents.defaults.workspace"; placeholder: "~/.bao/workspace" }
+                        SettingsField { label: tr("默认聊天模型", "Primary Model"); dotpath: "agents.defaults.model"; placeholder: "openai/gpt-4o"; description: tr("Bao 平时聊天最常用的模型", "The model Bao uses for normal chats") }
+                        SettingsField { label: tr("后台小任务模型", "Background Model"); dotpath: "agents.defaults.utilityModel"; placeholder: "openrouter/google/gemini-flash-1.5"; description: tr("做标题生成、经验整理这类后台任务时更省钱的模型", "A cheaper model for background tasks such as titles and summaries") }
+                        SettingsField { label: tr("经验整理模型", "Learning Model"); dotpath: "agents.defaults.experienceModel"; placeholder: "utility / main / none"; description: tr("utility = 用后台模型 / main = 用主模型 / none = 关闭", "utility = use the background model / main = use the primary model / none = turn it off") }
+                        SettingsListField { label: tr("聊天里可切换的模型", "Switchable Models"); dotpath: "agents.defaults.models"; placeholder: "model1, model2"; description: tr("聊天中通过 /model 可以切到这些模型，不填也可以", "Models you can switch to with /model in chat; optional") }
 
                         SettingsCollapsible {
                             Layout.fillWidth: true
@@ -513,14 +1546,14 @@ Rectangle {
                                 width: parent.width
                                 spacing: spacingMd
 
-                                SettingsField { label: tr("最大 Token", "Max Tokens"); dotpath: "agents.defaults.maxTokens"; placeholder: "8192"; inputType: "number"; description: tr("单次回复的最大 token 数", "Max tokens per response") }
-                                SettingsField { label: tr("温度", "Temperature"); dotpath: "agents.defaults.temperature"; placeholder: "0.1"; inputType: "number"; description: tr("越低越确定，越高越随机（0-2）", "Lower = more deterministic, higher = more random (0-2)") }
-                                SettingsField { label: tr("工具迭代上限", "Max Tool Iterations"); dotpath: "agents.defaults.maxToolIterations"; placeholder: "20"; inputType: "number"; description: tr("单轮对话中最多调用工具的次数", "Max tool calls per conversation turn") }
-                                SettingsField { label: tr("记忆窗口", "Memory Window"); dotpath: "agents.defaults.memoryWindow"; placeholder: "50"; inputType: "number"; description: tr("保留最近多少条消息作为上下文", "Number of recent messages kept as context") }
+                                SettingsField { label: tr("单次回复上限", "Reply Length Limit"); dotpath: "agents.defaults.maxTokens"; placeholder: "8192"; inputType: "number"; description: tr("一条回复最多能输出多少内容", "How much one reply can generate at most") }
+                                SettingsField { label: tr("稳定 / 发散程度", "Stability vs Variety"); dotpath: "agents.defaults.temperature"; placeholder: "0.1"; inputType: "number"; description: tr("越低越稳，越高越发散（0-2）", "Lower is steadier; higher is more varied (0-2)") }
+                                SettingsField { label: tr("单轮最多调用工具次数", "Tool Call Limit Per Turn"); dotpath: "agents.defaults.maxToolIterations"; placeholder: "20"; inputType: "number"; description: tr("一轮对话里最多让 Bao 调多少次工具", "The maximum number of tool calls Bao can make in one turn") }
+                                SettingsField { label: tr("短期记忆长度", "Recent Memory Size"); dotpath: "agents.defaults.memoryWindow"; placeholder: "50"; inputType: "number"; description: tr("保留最近多少条消息作为上下文", "How many recent messages Bao keeps as context") }
                                 SettingsSelect {
-                                    label: tr("上下文管理", "Context Management")
+                                    label: tr("长对话管理", "Long Chat Handling")
                                     dotpath: "agents.defaults.contextManagement"
-                                    description: tr("长对话上下文窗口管理策略", "Strategy for managing context window in long conversations")
+                                    description: tr("对话很长时，Bao 怎么压缩和整理上下文", "How Bao trims and manages context in long conversations")
                                     options: [
                                         {"label": tr("关闭", "off"), "value": "off"},
                                         {"label": tr("观察", "observe"), "value": "observe"},
@@ -529,9 +1562,9 @@ Rectangle {
                                     ]
                                 }
                                 SettingsSelect {
-                                    label: tr("推理强度", "Reasoning Effort")
+                                    label: tr("深度思考强度", "Reasoning Depth")
                                     dotpath: "agents.defaults.reasoningEffort"
-                                    description: tr("控制模型推理扩展强度；Auto = 不显式设置", "Controls model reasoning extension; Auto = do not set explicitly")
+                                    description: tr("控制模型要不要多想一点；Auto = 交给模型自己判断", "Controls how much extra reasoning the model should use; Auto lets the model decide")
                                     options: [
                                         {"label": tr("自动", "Auto"), "value": null},
                                         {"label": "off", "value": "off"},
@@ -540,31 +1573,102 @@ Rectangle {
                                         {"label": "high", "value": "high"}
                                     ]
                                 }
-                                SettingsField { label: tr("工具输出预览字符", "Tool Output Preview Chars"); dotpath: "agents.defaults.toolOutputPreviewChars"; placeholder: "3000"; inputType: "number"; description: tr("外置后保留在消息中的预览长度", "Preview length kept in message after offloading") }
-                                SettingsField { label: tr("工具输出外置字符", "Tool Output Offload Chars"); dotpath: "agents.defaults.toolOutputOffloadChars"; placeholder: "8000"; inputType: "number"; description: tr("超过此长度的工具输出自动外置到文件", "Tool output exceeding this length is offloaded to file") }
-                                SettingsField { label: tr("上下文压实字节估算", "Context Compact Bytes Est"); dotpath: "agents.defaults.contextCompactBytesEst"; placeholder: "240000"; inputType: "number"; description: tr("触发上下文压实的估算字节阈值", "Estimated byte threshold to trigger context compaction") }
-                                SettingsField { label: tr("压实保留最近工具块", "Compact Keep Recent Tool Blocks"); dotpath: "agents.defaults.contextCompactKeepRecentToolBlocks"; placeholder: "4"; inputType: "number"; description: tr("压实时保留最近几组工具调用", "Number of recent tool call groups kept during compaction") }
-                                SettingsField { label: tr("产物保留天数", "Artifact Retention Days"); dotpath: "agents.defaults.artifactRetentionDays"; placeholder: "7"; inputType: "number"; description: tr("外置产物文件的自动清理天数", "Days before offloaded artifact files are auto-cleaned") }
-                                SettingsToggle { label: tr("发送进度", "Send Progress"); dotpath: "agents.defaults.sendProgress" }
-                                SettingsToggle { label: tr("发送工具提示", "Send Tool Hints"); dotpath: "agents.defaults.sendToolHints" }
+                                SettingsField { label: tr("工具结果预览长度", "Tool Preview Length"); dotpath: "agents.defaults.toolOutputPreviewChars"; placeholder: "3000"; inputType: "number"; description: tr("工具结果太长时，消息里先显示多少预览", "How much preview to keep in the message when tool output is long") }
+                                SettingsField { label: tr("工具结果外置阈值", "Tool Offload Threshold"); dotpath: "agents.defaults.toolOutputOffloadChars"; placeholder: "8000"; inputType: "number"; description: tr("超过这个长度就自动存成文件，不全塞进对话", "Tool output longer than this is moved to a file instead of staying fully in chat") }
+                                SettingsField { label: tr("开始压缩上下文的阈值", "Context Trim Threshold"); dotpath: "agents.defaults.contextCompactBytesEst"; placeholder: "240000"; inputType: "number"; description: tr("对话太长时，达到这个体量就开始压缩", "When the conversation grows past this size, Bao starts compacting it") }
+                                SettingsField { label: tr("压缩时保留最近工具块", "Recent Tool Blocks to Keep"); dotpath: "agents.defaults.contextCompactKeepRecentToolBlocks"; placeholder: "4"; inputType: "number"; description: tr("压缩长对话时，保留最近几组工具调用", "How many recent tool call groups to keep when compacting") }
+                                SettingsField { label: tr("临时产物保留天数", "Artifact Cleanup Days"); dotpath: "agents.defaults.artifactRetentionDays"; placeholder: "7"; inputType: "number"; description: tr("自动清理临时文件前保留多少天", "How many days temporary output files are kept before cleanup") }
+                                SettingsToggle { label: tr("回复里显示进度提示", "Show Progress Updates"); dotpath: "agents.defaults.sendProgress" }
+                                SettingsToggle { label: tr("回复里显示工具提示", "Show Tool Hints"); dotpath: "agents.defaults.sendToolHints" }
                             }
                         }
                     }
                 }
 
                 SettingsSection {
+                    id: providerSection
                     Layout.fillWidth: true
-                    title: strings.section_provider
+                    visible: root.onboardingMode || root._activeTab === 0
+                    spotlight: root.onboardingMode && root.onboardingStepIndex === 1
+                    title: root.onboardingMode ? tr("第 2 步 · 选一个 AI 服务", "Step 2 · Pick one AI service") : strings.section_provider
+                    description: root.onboardingMode
+                                 ? tr("这里先只做一件事：连上一个能聊天的 AI 服务。大多数第三方平台都选 openai；只有直连 Claude 或 Gemini 官方时才改成对应类型。", "Keep this simple: connect one AI service that can chat. Most proxy and aggregator services stay on openai; switch only when you connect to the official Claude or Gemini endpoints.")
+                                 : tr("先配一个能用的 Provider 就够了；其他供应商可以后面再加。", "One working provider is enough to get started; you can add others later.")
+                    actionText: root.onboardingMode ? tr("保存服务连接", "Save connection") : strings.settings_save
+                    actionHandler: function() { root.saveOnboardingProviderStep() }
+                    helpVisible: true
+                    helpHandler: function() {
+                        root._openHelp(tr("AI 服务连接说明", "AI Service Connection Guide"), root._providerHelpSections())
+                    }
 
                     ColumnLayout {
+                        id: providerSectionBody
                         width: parent.width
                         spacing: spacingMd
 
+                        Flow {
+                            visible: root.onboardingMode
+                            width: parent.width
+                            spacing: spacingSm
+
+                            Repeater {
+                                model: root.onboardingProviderPresets
+
+                                delegate: ChoiceCard {
+                                    required property var modelData
+                                    objectName: "onboardingProviderPreset_" + (modelData.id || "unknown")
+
+                                    width: Math.max(170, Math.floor((providerSectionBody.width - (spacingSm * 2)) / 3))
+                                    badgeText: modelData.accent || ""
+                                    title: modelData.title || ""
+                                    description: modelData.subtitle || ""
+                                    trailingText: modelData.type || "openai"
+                                    selected: root._providerPresetSelected(modelData)
+                                    onClicked: root._applyProviderPreset(modelData)
+                                }
+                            }
+                        }
+
+                        CalloutPanel {
+                            visible: root.onboardingMode
+                            Layout.fillWidth: true
+                            panelColor: root.providerConfigured ? (isDark ? "#1022C55E" : "#0F22C55E") : (isDark ? "#0CFFFFFF" : "#07000000")
+                            panelBorderColor: root.providerConfigured ? (isDark ? "#3622C55E" : "#3022C55E") : borderSubtle
+
+                            ColumnLayout {
+                                id: providerIntro
+                                width: parent.width
+                                spacing: 6
+
+                                Text {
+                                    Layout.fillWidth: true
+                                    text: root.providerConfigured
+                                          ? tr("AI 服务已准备好", "AI service ready")
+                                          : tr("只需要先连一个就够", "One service is enough")
+                                    color: textPrimary
+                                    font.pixelSize: typeLabel
+                                    font.weight: Font.DemiBold
+                                    wrapMode: Text.WordWrap
+                                }
+
+                                Text {
+                                    Layout.fillWidth: true
+                                    text: root.providerConfigured
+                                          ? tr("你已经有可用的 API Key 了。接下来只剩确认默认模型。", "You already have a working API key. The last step is confirming the default model.")
+                                          : tr("如果不确定，先点上面的 OpenAI / 官方 或 OpenRouter 预设，再把 API Key 填进去。只有你用代理或公司网关时，才需要展开“自定义接口（可选）”。", "If you are unsure, start with the OpenAI / Official or OpenRouter preset above, then paste in the API key. Only expand Custom Endpoint when you use a proxy or company gateway.")
+                                    color: textSecondary
+                                    font.pixelSize: typeMeta
+                                    wrapMode: Text.WordWrap
+                                }
+                            }
+                        }
+
                         Repeater {
                             id: providerRepeater
-                            model: root._providerList
+                            model: root.onboardingMode ? [] : root._providerList
 
                             delegate: Rectangle {
+                                id: providerCard
                                 Layout.fillWidth: true
                                 radius: radiusMd
                                 color: isDark ? "#0DFFFFFF" : "#08000000"
@@ -583,116 +1687,253 @@ Rectangle {
                                     anchors.margins: spacingMd
                                     spacing: spacingMd
 
-                                    Item {
+                                    ExpandHeader {
+                                        id: providerHeader
                                         Layout.fillWidth: true
-                                        implicitHeight: 32
+                                        headerHeight: 32
+                                        expanded: providerCard.expanded
+                                        title: root.onboardingMode
+                                               ? root._providerDisplayName(provData)
+                                               : (provData.name || "")
+                                        titleColor: textPrimary
+                                        titlePixelSize: 14
+                                        titleWeight: Font.Medium
+                                        reservedRightMargin: 36
+                                        onClicked: providerCard.expanded = !providerCard.expanded
 
-                                        RowLayout {
-                                            anchors.fill: parent
-                                            spacing: 8
+                                        Rectangle {
+                                            radius: radiusSm
+                                            color: isDark ? "#14FFFFFF" : "#10000000"
+                                            implicitHeight: 24
+                                            implicitWidth: badgeText.implicitWidth + 14
 
                                             Text {
-                                                text: expanded ? "▾" : "▸"
-                                                color: textTertiary
+                                                id: badgeText
+                                                anchors.centerIn: parent
+                                                text: provData.type || ""
+                                                color: textSecondary
                                                 font.pixelSize: 12
-                                            }
-                                            Text {
-                                                text: provData.name || ""
-                                                color: textPrimary
-                                                font.pixelSize: 14
-                                                font.weight: Font.Medium
-                                                Layout.fillWidth: true
-                                            }
-                                            Rectangle {
-                                                radius: radiusSm
-                                                color: isDark ? "#14FFFFFF" : "#10000000"
-                                                implicitHeight: 24
-                                                implicitWidth: badgeText.implicitWidth + 14
-
-                                                Text {
-                                                    id: badgeText
-                                                    anchors.centerIn: parent
-                                                    text: provData.type || ""
-                                                    color: textSecondary
-                                                    font.pixelSize: 12
-                                                }
-                                            }
-                                            Rectangle {
-                                                width: 28
-                                                height: 28
-                                                radius: radiusSm
-                                                color: deleteHover.containsMouse ? (isDark ? "#30F87171" : "#20F87171") : "transparent"
-                                                Behavior on color { ColorAnimation { duration: motionFast; easing.type: easeStandard } }
-
-                                                Text {
-                                                    anchors.centerIn: parent
-                                                    text: "\u2715"
-                                                    color: deleteHover.containsMouse ? statusError : textTertiary
-                                                    font.pixelSize: 13
-                                                }
-
-                                                MouseArea {
-                                                    id: deleteHover
-                                                    anchors.fill: parent
-                                                    hoverEnabled: true
-                                                    acceptedButtons: Qt.LeftButton
-                                                    scrollGestureEnabled: false
-                                                    cursorShape: Qt.PointingHandCursor
-                                                    onClicked: {
-                                                        if (!configService || !provData.name) return
-                                                        var ok = configService.removeProvider(provData.name)
-                                                        toast.show(ok ? strings.settings_saved_hint : strings.settings_save_failed, ok)
-                                                        if (ok) root._loadProviders()
-                                                    }
-                                                }
                                             }
                                         }
 
-                                        MouseArea {
-                                            anchors.left: parent.left
-                                            anchors.right: parent.right
-                                            anchors.top: parent.top
-                                            anchors.bottom: parent.bottom
-                                            anchors.rightMargin: 36
-                                            hoverEnabled: true
-                                            acceptedButtons: Qt.LeftButton
-                                            scrollGestureEnabled: false
-                                            cursorShape: Qt.PointingHandCursor
-                                            onClicked: expanded = !expanded
+                                        IconCircleButton {
+                                            visible: !(root.onboardingMode && root._providerList.length <= 1)
+                                            buttonSize: 28
+                                            glyphText: "\u2715"
+                                            glyphSize: 13
+                                            fillColor: "transparent"
+                                            hoverFillColor: isDark ? "#30F87171" : "#20F87171"
+                                            outlineColor: "transparent"
+                                            glyphColor: textTertiary
+                                            onClicked: if (provData.name) root._removeProviderDraft(provData.name)
                                         }
                                     }
 
-                                    ColumnLayout {
-                                        visible: expanded
+                                    ExpandReveal {
+                                        expanded: providerCard.expanded
                                         Layout.fillWidth: true
+                                        bottomPadding: spacingMd
+                                        slideAxis: Qt.Vertical
+                                        slideSign: 1
+                                        slideDistance: 14
+
+                                        ColumnLayout {
+                                            width: parent.width
+                                            spacing: spacingMd
+
+                                            SettingsField {
+                                                visible: !root.onboardingMode
+                                                label: tr("名称", "Name")
+                                                placeholder: "openaiCompatible"
+                                                dotpath: "_prov_" + index + "_name"
+                                                Component.onCompleted: presetText(provData.name || "")
+                                            }
+                                            SettingsSelect {
+                                                visible: !root.onboardingMode
+                                                label: tr("类型", "Type")
+                                                dotpath: "_prov_" + index + "_type"
+                                                description: tr("大多数平台选 openai；只有 Claude 官方选 anthropic，Gemini 官方选 gemini。", "Choose openai for most services. Use anthropic only for official Claude, and gemini only for official Gemini.")
+                                                options: [
+                                                    {"label": tr("openai - OpenAI / OpenRouter / DeepSeek / Groq", "openai - OpenAI / OpenRouter / DeepSeek / Groq"), "value": "openai"},
+                                                    {"label": tr("anthropic - Claude 官方", "anthropic - Official Claude"), "value": "anthropic"},
+                                                    {"label": tr("gemini - Gemini 官方", "gemini - Official Gemini"), "value": "gemini"}
+                                                ]
+                                                Component.onCompleted: presetValue(provData.type || "openai")
+                                            }
+                                            SettingsCollapsible {
+                                                visible: root.onboardingMode
+                                                Layout.fillWidth: true
+                                                title: tr("更改连接方式（可选）", "Change connection mode (optional)")
+
+                                                ColumnLayout {
+                                                    width: parent.width
+                                                    spacing: spacingMd
+
+                                                    SettingsSelect {
+                                                        label: tr("连接方式", "Connection mode")
+                                                        dotpath: "_prov_" + index + "_type"
+                                                        description: tr("默认不用动。只有你明确知道自己连的是 Claude 官方或 Gemini 官方时才改。", "You usually do not need to change this. Only switch when you know you are connecting to the official Claude or Gemini endpoints.")
+                                                        options: [
+                                                            {"label": tr("openai - 大多数服务", "openai - Most services"), "value": "openai"},
+                                                            {"label": tr("anthropic - Claude 官方", "anthropic - Official Claude"), "value": "anthropic"},
+                                                            {"label": tr("gemini - Gemini 官方", "gemini - Official Gemini"), "value": "gemini"}
+                                                        ]
+                                                        Component.onCompleted: presetValue(provData.type || "openai")
+                                                    }
+                                                }
+                                            }
+                                            SettingsField {
+                                                label: tr("API 密钥", "API Key")
+                                                placeholder: "sk-..."
+                                                dotpath: "_prov_" + index + "_apiKey"
+                                                isSecret: true
+                                                Component.onCompleted: presetText(provData.apiKey || "")
+                                            }
+                                            SettingsCollapsible {
+                                                visible: root.onboardingMode
+                                                Layout.fillWidth: true
+                                                title: tr("自定义接口（可选）", "Custom endpoint (optional)")
+
+                                                ColumnLayout {
+                                                    width: parent.width
+                                                    spacing: spacingMd
+
+                                                    SettingsField {
+                                                        label: tr("API 地址", "API Base URL")
+                                                        placeholder: tr("可留空；例如 https://api.openai.com/v1", "Optional; for example https://api.openai.com/v1")
+                                                        dotpath: "_prov_" + index + "_apiBase"
+                                                        description: tr("只在你用代理或自建服务时填写；官方默认通常可以留空。", "Only fill this when you use a proxy or self-hosted service. Official defaults can usually stay empty.")
+                                                        Component.onCompleted: presetText(provData.apiBase || "")
+                                                    }
+                                                }
+                                            }
+                                            SettingsField {
+                                                visible: !root.onboardingMode
+                                                label: tr("API 地址", "API Base URL")
+                                                placeholder: tr("可留空；例如 https://api.openai.com/v1", "Optional; for example https://api.openai.com/v1")
+                                                dotpath: "_prov_" + index + "_apiBase"
+                                                description: tr("只在你用代理或自建服务时填写；官方默认通常可以留空。", "Only fill this when you use a proxy or self-hosted service. Official defaults can usually stay empty.")
+                                                Component.onCompleted: presetText(provData.apiBase || "")
+                                            }
+                                        }
+                                    }
+                                }
+                        }
+
+                        Rectangle {
+                            visible: root.onboardingMode && root._providerList.length > 0
+                            Layout.fillWidth: true
+                            implicitHeight: onboardingProviderCardCol.implicitHeight + 24
+                            radius: radiusMd
+                            color: isDark ? "#0DFFFFFF" : "#08000000"
+                            border.color: borderSubtle
+                            border.width: 1
+
+                            ColumnLayout {
+                                id: onboardingProviderCardCol
+                                anchors.left: parent.left
+                                anchors.right: parent.right
+                                anchors.top: parent.top
+                                anchors.margins: 12
+                                spacing: spacingMd
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+
+                                    ColumnLayout {
+                                        Layout.fillWidth: true
+                                        spacing: 4
+
+                                        Text {
+                                            Layout.fillWidth: true
+                                            text: root._providerDisplayName(root.onboardingPrimaryProvider)
+                                            color: textPrimary
+                                            font.pixelSize: typeBody
+                                            font.weight: Font.DemiBold
+                                            wrapMode: Text.WordWrap
+                                        }
+
+                                        Text {
+                                            Layout.fillWidth: true
+                                            text: root.providerConfigured
+                                                  ? tr("这个服务连接已经可用了。你可以直接继续下一步，或者在下面替换 API Key。", "This service connection is ready. You can continue to the next step or replace the API key below.")
+                                                  : tr("主路径只需要一件事：把这个服务的 API Key 粘进来。", "The main path only needs one thing: paste the API key for this service here.")
+                                            color: textSecondary
+                                            font.pixelSize: typeMeta
+                                            wrapMode: Text.WordWrap
+                                        }
+                                    }
+
+                                    Rectangle {
+                                        implicitWidth: providerTypeChip.implicitWidth + 16
+                                        implicitHeight: 26
+                                        radius: 13
+                                        color: isDark ? "#14FFFFFF" : "#10FFFFFF"
+
+                                        Text {
+                                            id: providerTypeChip
+                                            anchors.centerIn: parent
+                                            text: onboardingPrimaryProvider.type || "openai"
+                                            color: accent
+                                            font.pixelSize: typeCaption
+                                            font.weight: Font.DemiBold
+                                        }
+                                    }
+                                }
+
+                                SettingsField {
+                                    id: onboardingProviderApiKeyField
+                                    objectName: "onboardingProviderApiKeyField"
+                                    label: tr("这个服务的 API Key", "API key for this service")
+                                    placeholder: "sk-..."
+                                    dotpath: "_prov_0_apiKey"
+                                    isSecret: true
+                                    description: tr("只填这一项就可以先继续。", "This is the only field you need to continue.")
+                                    Component.onCompleted: {
+                                        presetText(root.onboardingPrimaryProvider.apiKey || "")
+                                        root._onboardingProviderApiKeyFieldRef = onboardingProviderApiKeyField
+                                    }
+                                }
+
+                                SettingsCollapsible {
+                                    id: onboardingProviderDetailsCollapsible
+                                    objectName: "onboardingProviderDetailsCollapsible"
+                                    Layout.fillWidth: true
+                                    title: tr("需要的话，再改连接细节", "Change connection details only if needed")
+
+                                    ColumnLayout {
+                                        width: parent.width
                                         spacing: spacingMd
 
-                                        SettingsField {
-                                            label: tr("名称", "Name")
-                                            placeholder: "openaiCompatible"
-                                            dotpath: "_prov_" + index + "_name"
-                                            Component.onCompleted: presetText(provData.name || "")
+                                        SettingsSelect {
+                                            id: onboardingProviderTypeField
+                                            objectName: "onboardingProviderTypeField"
+                                            label: tr("连接方式", "Connection mode")
+                                            dotpath: "_prov_0_type"
+                                            description: tr("默认不用动。只有你确定自己连的是 Claude 官方或 Gemini 官方时才改。", "You usually do not need to change this. Only switch when you know you are connecting to the official Claude or Gemini endpoints.")
+                                            options: [
+                                                {"label": tr("openai - 大多数服务", "openai - Most services"), "value": "openai"},
+                                                {"label": tr("anthropic - Claude 官方", "anthropic - Official Claude"), "value": "anthropic"},
+                                                {"label": tr("gemini - Gemini 官方", "gemini - Official Gemini"), "value": "gemini"}
+                                            ]
+                                            Component.onCompleted: {
+                                                presetValue(root.onboardingPrimaryProvider.type || "openai")
+                                                root._onboardingProviderTypeFieldRef = onboardingProviderTypeField
+                                            }
                                         }
+
                                         SettingsField {
-                                            label: tr("类型", "Type")
-                                            placeholder: "openai / anthropic / gemini"
-                                            dotpath: "_prov_" + index + "_type"
-                                            description: tr("openai 兼容大多数第三方 / anthropic / gemini", "openai compatible with most third-party providers / anthropic / gemini")
-                                            Component.onCompleted: presetText(provData.type || "")
+                                            id: onboardingProviderApiBaseField
+                                            objectName: "onboardingProviderApiBaseField"
+                                            label: tr("自定义接口地址", "Custom endpoint URL")
+                                            placeholder: tr("可留空；例如 https://api.openai.com/v1", "Optional; for example https://api.openai.com/v1")
+                                            dotpath: "_prov_0_apiBase"
+                                            description: tr("只有你用代理、自建服务或公司网关时才需要填写。", "Only needed for proxies, self-hosted services, or company gateways.")
+                                            Component.onCompleted: {
+                                                presetText(root.onboardingPrimaryProvider.apiBase || "")
+                                                root._onboardingProviderApiBaseFieldRef = onboardingProviderApiBaseField
+                                            }
                                         }
-                                        SettingsField {
-                                            label: tr("API 密钥", "API Key")
-                                            placeholder: "sk-..."
-                                            dotpath: "_prov_" + index + "_apiKey"
-                                            isSecret: true
-                                            Component.onCompleted: presetText(provData.apiKey || "")
-                                        }
-                                        SettingsField {
-                                            label: tr("API 地址", "API Base URL")
-                                            placeholder: "https://api.openai.com/v1"
-                                            dotpath: "_prov_" + index + "_apiBase"
-                                            description: tr("自定义端点地址，留空使用官方默认", "Custom endpoint URL, leave empty for official default")
-                                            Component.onCompleted: presetText(provData.apiBase || "")
                                     }
                                 }
                             }
@@ -701,10 +1942,13 @@ Rectangle {
                         }
 
                         Rectangle {
+                            visible: !root.onboardingMode
                             Layout.fillWidth: true
-                            height: 42
+                            height: root.onboardingMode && root._providerList.length === 0 ? 48 : 42
                             radius: radiusMd
-                            color: addHover.containsMouse ? (isDark ? "#0AFFFFFF" : "#08000000") : "transparent"
+                            color: root.onboardingMode && root._providerList.length === 0
+                                   ? (addHover.containsMouse ? accentHover : accent)
+                                   : (addHover.containsMouse ? (isDark ? "#0AFFFFFF" : "#08000000") : "transparent")
                             border.color: accent
                             border.width: 1
                             opacity: addHover.containsMouse ? 1.0 : 0.7
@@ -714,8 +1958,10 @@ Rectangle {
 
                             Text {
                                 anchors.centerIn: parent
-                                text: "+ " + strings.section_provider_add
-                                color: accent
+                                text: root.onboardingMode && root._providerList.length === 0
+                                      ? tr("+ 先添加第一个 Provider", "+ Add your first provider")
+                                      : ("+ " + strings.section_provider_add)
+                                color: root.onboardingMode && root._providerList.length === 0 ? "#FFFFFFFF" : accent
                                 font.pixelSize: 13
                                 font.weight: Font.Medium
                             }
@@ -734,10 +1980,138 @@ Rectangle {
                 }
 
                 SettingsSection {
+                    id: onboardingModelSection
                     Layout.fillWidth: true
-                    title: strings.section_channels
+                    visible: root.onboardingMode
+                    spotlight: root.onboardingMode && root.onboardingStepIndex === 2
+                    title: tr("第 3 步 · 选默认聊天 AI", "Step 3 · Pick your default chat AI")
+                    description: root.providerConfigured
+                                 ? tr("最后一步只要选一个你想先用来聊天的 AI；保存后如果上面的服务和 API Key 都有效，会自动进入聊天。", "The last step is choosing the AI you want to start chatting with. Once saved, the app automatically enters chat if the service and API key above are valid.")
+                                 : tr("你也可以先把默认聊天 AI 选好，但真正生效前，先把上面的服务连接保存一下。", "You can choose the default chat AI now, but it only becomes usable after the service connection above is saved.")
+                    actionText: root.providerConfigured
+                                ? tr("保存并开始聊天", "Save and start chatting")
+                                : tr("先保存上面的服务连接", "Save the connection above first")
+                    actionEnabled: root.providerConfigured
+                    actionHandler: function() { root._saveSection(onboardingModelSectionBody) }
 
                     ColumnLayout {
+                        id: onboardingModelSectionBody
+                        width: parent.width
+                        spacing: spacingMd
+
+                        Flow {
+                            visible: root.onboardingMode
+                            width: parent.width
+                            spacing: spacingSm
+
+                            Repeater {
+                                model: root.onboardingModelPresets
+
+                                delegate: ChoiceCard {
+                                    required property var modelData
+
+                                    width: Math.max(170, Math.floor((onboardingModelSectionBody.width - (spacingSm * 2)) / 3))
+                                    title: modelData.label || ""
+                                    description: modelData.hint || ""
+                                    selected: root._modelPresetSelected(modelData)
+                                    onClicked: root._applyModelPreset(modelData)
+                                }
+                            }
+                        }
+
+                        CalloutPanel {
+                            Layout.fillWidth: true
+                            panelColor: root.modelConfigured ? (isDark ? "#1022C55E" : "#0F22C55E") : (isDark ? "#0CFFFFFF" : "#07000000")
+                            panelBorderColor: root.modelConfigured ? (isDark ? "#3622C55E" : "#3022C55E") : borderSubtle
+
+                            ColumnLayout {
+                                id: modelIntro
+                                width: parent.width
+                                spacing: 6
+
+                                Text {
+                                    Layout.fillWidth: true
+                                    text: root.onboardingDraftModel !== ""
+                                          ? tr("你当前选的是：", "Your current choice is:")
+                                          : tr("先从推荐卡片里选一个最省心的", "Start with one of the recommended cards")
+                                    color: textPrimary
+                                    font.pixelSize: typeLabel
+                                    font.weight: Font.DemiBold
+                                    wrapMode: Text.WordWrap
+                                }
+
+                                Text {
+                                    Layout.fillWidth: true
+                                    text: root.onboardingDraftModel !== ""
+                                          ? root._displayModelLabel(root.onboardingDraftModel) + " (" + root.onboardingDraftModel + ")"
+                                          : tr("推荐卡已经按你上一步选的 AI 服务做了简化。只有你知道准确模型名时，才需要手动填写。", "The recommended cards are already simplified based on the AI service you picked above. Only enter a model manually when you already know the exact model name.")
+                                    color: textSecondary
+                                    font.pixelSize: typeMeta
+                                    wrapMode: Text.WordWrap
+                                }
+                            }
+                        }
+
+                        SettingsCollapsible {
+                            id: onboardingModelManualField
+                            Layout.fillWidth: true
+                            title: tr("我知道准确模型名，手动填写", "I know the exact model name")
+
+                            ColumnLayout {
+                                width: parent.width
+                                spacing: spacingMd
+
+                                SettingsField {
+                                    id: onboardingPrimaryModelField
+                                    label: tr("默认聊天 AI", "Default chat AI")
+                                    dotpath: "agents.defaults.model"
+                                    placeholder: "openai/gpt-4o"
+                                    description: tr("只有你知道准确模型名时才需要手填。否则直接点上面的推荐卡片就够了。", "Only fill this when you already know the exact model name. Otherwise, using one of the recommended cards above is enough.")
+                                }
+                            }
+                        }
+                        SettingsCollapsible {
+                            Layout.fillWidth: true
+                            title: tr("可选：再省一点成本", "Optional: save a bit more on background tasks")
+
+                            ColumnLayout {
+                                width: parent.width
+                                spacing: spacingMd
+
+                                Text {
+                                    Layout.fillWidth: true
+                                    text: tr("这一项不是开始聊天所必需的。只有你想把标题生成、总结这类后台动作换成更便宜的模型时，再填这里。", "This is not required to start chatting. Only fill it when you want background actions like titles or summaries to use a cheaper model.")
+                                    color: textTertiary
+                                    font.pixelSize: typeMeta
+                                    wrapMode: Text.WordWrap
+                                }
+
+                                SettingsField {
+                                    label: tr("更省钱的后台 AI（可选）", "Cheaper background AI (optional)")
+                                    dotpath: "agents.defaults.utilityModel"
+                                    placeholder: "openrouter/google/gemini-flash-1.5"
+                                    description: tr("留空也完全没问题。", "Leaving this empty is perfectly fine.")
+                                }
+                            }
+                        }
+                    }
+                }
+
+                SettingsSection {
+                    id: channelsSection
+                    Layout.fillWidth: true
+                    visible: !root.onboardingMode && root._activeTab === 1
+                    title: strings.section_channels
+                    description: tr("只有你真正要接入的平台才需要配置；不使用的渠道可以完全不动。", "Only configure the platforms you actually plan to use; unused channels can stay untouched.")
+                    actionText: strings.settings_save
+                    actionHandler: function() { root._saveSection(channelsSectionBody) }
+                    helpVisible: true
+                    helpHandler: function() {
+                        root._openHelp(tr("渠道接入说明", "Channel Setup Guide"), root._channelHelpSections())
+                    }
+
+                    ColumnLayout {
+                        id: channelsSectionBody
                         width: parent.width
                         spacing: 18
 
@@ -906,10 +2280,16 @@ Rectangle {
                 }
 
                 SettingsSection {
+                    id: gatewaySection
                     Layout.fillWidth: true
+                    visible: !root.onboardingMode && root._activeTab === 2
                     title: strings.section_gateway
+                    description: tr("通常保持默认即可；只有你明确知道部署方式时再改。", "The defaults are usually fine; change these only when you know your deployment needs them.")
+                    actionText: strings.settings_save
+                    actionHandler: function() { root._saveSection(gatewaySectionBody) }
 
                     ColumnLayout {
+                        id: gatewaySectionBody
                         width: parent.width
                         spacing: spacingMd
 
@@ -921,10 +2301,16 @@ Rectangle {
                 }
 
                 SettingsSection {
+                    id: toolsSection
                     Layout.fillWidth: true
+                    visible: !root.onboardingMode && root._activeTab === 2
                     title: strings.section_tools
+                    description: tr("这些是增强功能，不影响最基本的聊天启动。", "These are optional enhancements and are not required for basic chat setup.")
+                    actionText: strings.settings_save
+                    actionHandler: function() { root._saveSection(toolsSectionBody) }
 
                     ColumnLayout {
+                        id: toolsSectionBody
                         width: parent.width
                         spacing: spacingMd
 
@@ -987,49 +2373,17 @@ Rectangle {
                     Layout.fillWidth: true
                     Layout.preferredHeight: 40
                 }
+                }
             }
-        }
-    }
-
-    Rectangle {
-        id: saveButton
-        anchors.top: parent.top
-        anchors.right: parent.right
-        anchors.topMargin: spacingXl
-        anchors.rightMargin: spacingXl
-        width: 120
-        height: 40
-        radius: radiusMd
-        color: saveHover.containsMouse ? accentHover : accent
-        z: 20
-
-        Behavior on color { ColorAnimation { duration: motionFast; easing.type: easeStandard } }
-
-        Text {
-            anchors.centerIn: parent
-            text: strings.settings_save
-            color: "#FFFFFFFF"
-            font.pixelSize: 14
-            font.weight: Font.DemiBold
-            font.letterSpacing: 0.2
-        }
-
-        MouseArea {
-            id: saveHover
-            anchors.fill: parent
-            hoverEnabled: true
-            acceptedButtons: Qt.LeftButton
-            scrollGestureEnabled: false
-            cursorShape: Qt.PointingHandCursor
-            onClicked: root.saveAll()
         }
     }
 
     AppToast {
         id: toast
-        anchors.top: saveButton.bottom
-        anchors.right: saveButton.right
-        anchors.topMargin: 8
+        anchors.top: parent.top
+        anchors.right: parent.right
+        anchors.topMargin: 24
+        anchors.rightMargin: 24
         z: 21
         successBg: isDark ? "#1F7A4D" : "#16A34A"
         errorBg: isDark ? "#B84040" : "#DC2626"
@@ -1037,123 +2391,148 @@ Rectangle {
         duration: toastDurationLong
     }
 
-    Rectangle {
-        anchors.fill: parent
-        visible: root._pendingManualUpdateCheck && updateService && updateService.state === "available"
+    AppModal {
+        id: helpModal
         z: 22
-        color: isDark ? "#A6000000" : "#66000000"
+        darkMode: isDark
+        title: root._helpTitle
+        closeText: tr("我知道了", "Got it")
 
-        MouseArea {
-            anchors.fill: parent
-            hoverEnabled: true
-            cursorShape: Qt.PointingHandCursor
-            onClicked: root._pendingManualUpdateCheck = false
-        }
+        Repeater {
+            model: root._helpSections
 
-        Rectangle {
-            width: Math.min(root.width - 48, 460)
-            anchors.centerIn: parent
-            radius: radiusLg
-            color: bgElevated
-            border.width: 1
-            border.color: borderDefault
-            implicitHeight: dialogCol.implicitHeight + 28
+            delegate: Rectangle {
+                required property var modelData
 
-            ColumnLayout {
-                id: dialogCol
-                anchors.fill: parent
-                anchors.margins: 14
-                spacing: 12
+                width: parent.width
+                radius: radiusMd
+                color: isDark ? "#0DFFFFFF" : "#08000000"
+                border.color: borderSubtle
+                border.width: 1
+                implicitHeight: helpBlock.implicitHeight + 24
 
-                Text {
-                    Layout.fillWidth: true
-                    text: strings.update_modal_title
-                    color: textPrimary
-                    font.pixelSize: typeTitle
-                    font.weight: Font.DemiBold
-                    wrapMode: Text.WordWrap
-                }
-
-                Text {
-                    Layout.fillWidth: true
-                    text: strings.update_latest_version + " " + (updateService ? updateService.latestVersion : "")
-                    color: textSecondary
-                    font.pixelSize: typeBody
-                    wrapMode: Text.WordWrap
-                    visible: updateService !== null && !!updateService.latestVersion
-                }
-
-                Text {
-                    Layout.fillWidth: true
-                    text: updateService ? updateService.notesMarkdown : ""
-                    color: textSecondary
-                    font.pixelSize: typeMeta
-                    wrapMode: Text.WordWrap
-                    visible: updateService !== null && !!updateService.notesMarkdown
-                }
-
-                RowLayout {
-                    Layout.fillWidth: true
+                Column {
+                    id: helpBlock
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.top: parent.top
+                    anchors.margins: 12
                     spacing: 8
 
-                    Rectangle {
-                        Layout.fillWidth: true
-                        implicitHeight: 38
-                        radius: 19
-                        color: dialogLater.containsMouse ? bgCardHover : "transparent"
-                        border.width: 1
-                        border.color: borderSubtle
-
-                        Text {
-                            anchors.centerIn: parent
-                            text: strings.update_modal_later
-                            color: textSecondary
-                            font.pixelSize: typeLabel
-                            font.weight: Font.Medium
-                        }
-
-                        MouseArea {
-                            id: dialogLater
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: root._pendingManualUpdateCheck = false
-                        }
+                    Text {
+                        width: parent.width
+                        text: modelData.title || ""
+                        color: textPrimary
+                        font.pixelSize: typeBody
+                        font.weight: Font.DemiBold
+                        wrapMode: Text.WordWrap
                     }
 
-                    Rectangle {
-                        Layout.fillWidth: true
-                        implicitHeight: 38
-                        radius: 19
-                        color: dialogInstall.containsMouse ? accentHover : accent
-
-                        Text {
-                            anchors.centerIn: parent
-                            text: strings.update_modal_install
-                            color: "#FFFFFFFF"
-                            font.pixelSize: typeLabel
-                            font.weight: Font.DemiBold
-                        }
-
-                        MouseArea {
-                            id: dialogInstall
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: {
-                                root._pendingManualUpdateCheck = false
-                                if (updateBridge)
-                                    updateBridge.installRequested()
-                            }
-                        }
+                    Text {
+                        width: parent.width
+                        text: modelData.body || ""
+                        color: textSecondary
+                        font.pixelSize: typeLabel
+                        wrapMode: Text.WordWrap
+                        lineHeight: 1.25
                     }
                 }
             }
         }
     }
 
+    AppModal {
+        id: updateConfirmModal
+        z: 23
+        darkMode: isDark
+        title: strings.update_modal_title
+        showDefaultCloseAction: false
+        maxModalWidth: 460
+        maxModalHeight: 520
+
+        Text {
+            width: parent.width
+            text: strings.update_latest_version + " " + (updateService ? updateService.latestVersion : "")
+            color: textSecondary
+            font.pixelSize: typeBody
+            wrapMode: Text.WordWrap
+            visible: updateService !== null && !!updateService.latestVersion
+        }
+
+        Text {
+            width: parent.width
+            text: updateService ? updateService.notesMarkdown : ""
+            color: textSecondary
+            font.pixelSize: typeMeta
+            wrapMode: Text.WordWrap
+            visible: updateService !== null && !!updateService.notesMarkdown
+        }
+
+        footer: [
+            Item {
+                Layout.fillWidth: true
+            },
+            Rectangle {
+                implicitWidth: laterLabel.implicitWidth + 28
+                implicitHeight: 38
+                radius: 19
+                color: dialogLater.containsMouse ? bgCardHover : "transparent"
+                border.width: 1
+                border.color: borderSubtle
+
+                Text {
+                    id: laterLabel
+                    anchors.centerIn: parent
+                    text: strings.update_modal_later
+                    color: textSecondary
+                    font.pixelSize: typeLabel
+                    font.weight: Font.Medium
+                }
+
+                MouseArea {
+                    id: dialogLater
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: updateConfirmModal.close()
+                }
+            },
+            Rectangle {
+                implicitWidth: installLabel.implicitWidth + 28
+                implicitHeight: 38
+                radius: 19
+                color: dialogInstall.containsMouse ? accentHover : accent
+
+                Text {
+                    id: installLabel
+                    anchors.centerIn: parent
+                    text: strings.update_modal_install
+                    color: "#FFFFFFFF"
+                    font.pixelSize: typeLabel
+                    font.weight: Font.DemiBold
+                }
+
+                MouseArea {
+                    id: dialogInstall
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: {
+                        updateConfirmModal.close()
+                        if (updateBridge)
+                            updateBridge.installRequested()
+                    }
+                }
+            }
+        ]
+    }
+
     Connections {
         target: configService
+        function onConfigLoaded() {
+            root._reloadLocalState()
+            Qt.callLater(function() { root._restoreScrollPosition() })
+        }
         function onSaveError(msg) {
             toast.show(root._translateError(msg), false)
         }

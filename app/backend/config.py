@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import tempfile
 from pathlib import Path
 from typing import Callable, ClassVar, TypeVar, cast
@@ -45,19 +46,97 @@ def _as_str(value: object, default: str = "") -> str:
     return default
 
 
-def _as_int(value: object) -> int | None:
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, int):
-        return value
-    if isinstance(value, float) and value.is_integer():
-        return int(value)
-    if isinstance(value, str):
-        try:
-            return int(value.strip())
-        except ValueError:
-            return None
+def _as_list(value: object) -> list[object] | None:
+    if isinstance(value, list):
+        return cast(list[object], value)
     return None
+
+
+_PROVIDER_COMMENT_LINES = (
+    '// "provider-name": {',
+    '//   "apiBase": "https://xxx",',
+    '//   "apiKey": "sk-xxx",',
+    '//   "extraHeaders": {},',
+    '//   "type": "openai/anthropic/gemini"',
+    "// }",
+)
+
+
+def _detect_newline(text: str) -> str:
+    if "\r\n" in text:
+        return "\r\n"
+    return "\n"
+
+
+def _find_matching_brace(text: str, open_brace: int) -> int:
+    normal = 0
+    in_string = 1
+    escape = 2
+    line_comment = 3
+    block_comment = 4
+
+    state = normal
+    depth = 0
+    i = open_brace
+    while i < len(text):
+        ch = text[i]
+        nxt = text[i + 1] if i + 1 < len(text) else ""
+
+        if state == normal:
+            if ch == '"':
+                state = in_string
+            elif ch == "/" and nxt == "/":
+                state = line_comment
+                i += 1
+            elif ch == "/" and nxt == "*":
+                state = block_comment
+                i += 1
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    return i
+        elif state == in_string:
+            if ch == "\\":
+                state = escape
+            elif ch == '"':
+                state = normal
+        elif state == escape:
+            state = in_string
+        elif state == line_comment:
+            if ch == "\n":
+                state = normal
+        elif state == block_comment and ch == "*" and nxt == "/":
+            state = normal
+            i += 1
+
+        i += 1
+
+    return -1
+
+
+def _inject_provider_comments(text: str) -> str:
+    match = re.search(r'^(?P<indent>\s*)"providers"\s*:\s*\{', text, re.MULTILINE)
+    if match is None:
+        return text
+
+    open_brace = match.end() - 1
+    close_brace = _find_matching_brace(text, open_brace)
+    if close_brace == -1:
+        return text
+
+    section = text[open_brace + 1 : close_brace]
+    if re.search(r'^\s*//\s*"provider-name"\s*:\s*\{', section, re.MULTILINE):
+        return text
+
+    base_indent = match.group("indent")
+    inner_indent = base_indent + "  "
+    newline = _detect_newline(text)
+    comment_block = newline.join(f"{inner_indent}{line}" for line in _PROVIDER_COMMENT_LINES)
+    suffix = "" if section.strip() else newline + base_indent
+    insertion = f"{newline}{comment_block}{suffix}"
+    return text[: open_brace + 1] + insertion + text[open_brace + 1 :]
 
 
 def _write_text_atomic(path: Path, content: str) -> None:
@@ -189,31 +268,20 @@ class ConfigService(QObject):
         providers = _as_dict(self._data.get("providers", {}))
         if providers is None:
             return []
-        indexed: list[tuple[int, dict[str, object], int]] = []
-        for idx, (name, provider) in enumerate(providers.items()):
+        visible: list[dict[str, object]] = []
+        for name, provider in providers.items():
             provider_dict = _as_dict(provider)
             if provider_dict is None:
                 continue
-            extra_headers = _as_dict(provider_dict.get("extraHeaders")) or {}
-            order = _as_int(provider_dict.get("order"))
-            if order is None:
-                order = idx
-            indexed.append(
-                (
-                    order,
-                    {
-                        "name": name,
-                        "type": _as_str(provider_dict.get("type", "")),
-                        "apiKey": _as_str(provider_dict.get("apiKey", "")),
-                        "apiBase": _as_str(provider_dict.get("apiBase", "")),
-                        "extraHeaders": extra_headers,
-                        "order": order,
-                    },
-                    idx,
-                )
+            visible.append(
+                {
+                    "name": name,
+                    "type": _as_str(provider_dict.get("type", "")),
+                    "apiKey": _as_str(provider_dict.get("apiKey", "")),
+                    "apiBase": _as_str(provider_dict.get("apiBase", "")),
+                }
             )
-        indexed.sort(key=lambda x: (x[0], x[2]))
-        return [item for _, item, _ in indexed]
+        return visible
 
     @_typed_slot(str, result=bool)
     def removeProvider(self, name: str) -> bool:
@@ -221,10 +289,9 @@ class ConfigService(QObject):
         providers = _as_dict(self._data.get("providers", {}))
         if providers is None or name not in providers:
             return False
-        new_providers: dict[str, object] = {
-            key: value for key, value in providers.items() if key != name
-        }
-        return self.save({"providers": new_providers})
+        return self.save(
+            {"providers": {key: value for key, value in providers.items() if key != name}}
+        )
 
     @_typed_slot("QVariantMap", result=bool)
     def save(self, changes: dict[str, object]) -> bool:
@@ -232,6 +299,8 @@ class ConfigService(QObject):
         if self._config_path is None:
             self.saveError.emit("Config path not set — call load() first")
             return False
+
+        changes = self._normalize_changes(changes)
 
         # Validate required fields
         err = self._validate(changes)
@@ -250,6 +319,8 @@ class ConfigService(QObject):
         except Exception as e:
             self.saveError.emit(f"Patch failed: {e}")
             return False
+        if "providers" in changes:
+            result = _inject_provider_comments(result)
         if errors:
             msgs = "; ".join(e.message for e in errors)
             self.saveError.emit(f"Patch errors: {msgs}")
@@ -303,6 +374,25 @@ class ConfigService(QObject):
                     channel = enabled_path.split(".")[1]
                     return f"token_required:{channel}"
         return None
+
+    def _normalize_changes(self, changes: dict[str, object]) -> dict[str, object]:
+        normalized = dict(changes)
+        provider_entries = _as_list(normalized.get("providers"))
+        if provider_entries is None:
+            return normalized
+
+        providers: dict[str, object] = {}
+        for entry in provider_entries:
+            entry_dict = _as_dict(entry)
+            if entry_dict is None:
+                continue
+            name = _as_str(entry_dict.get("name", "")).strip()
+            value = _as_dict(entry_dict.get("value"))
+            if not name or value is None:
+                continue
+            providers[name] = value
+        normalized["providers"] = providers
+        return normalized
 
     def _notify_state_changed(self) -> None:
         """Emit stateChanged so QML re-evaluates isValid / needsSetup."""

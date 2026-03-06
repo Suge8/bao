@@ -246,7 +246,7 @@ def test_save_rejects_invalid_bool_value(tmp_path):
     assert any("Config validation failed" in e for e in errors)
 
 
-def test_get_providers_sorted_by_order(tmp_path):
+def test_get_providers_preserves_config_order_and_hides_internal_fields(tmp_path):
     from app.backend.config import ConfigService
 
     config_with_ordered_providers = """{
@@ -259,7 +259,9 @@ def test_get_providers_sorted_by_order(tmp_path):
     "early": {
       "type": "openai",
       "apiKey": "sk-early",
-      "order": 1
+      "extraHeaders": {
+        "x-test": "1"
+      }
     }
   },
   "agents": {
@@ -275,41 +277,15 @@ def test_get_providers_sorted_by_order(tmp_path):
         svc.load()
 
     providers = svc.getProviders()
-    assert [p["name"] for p in providers] == ["early", "late"]
-    assert providers[0]["order"] == 1
-    assert providers[1]["order"] == 5
-
-
-def test_get_providers_missing_order_falls_back_to_index(tmp_path):
-    from app.backend.config import ConfigService
-
-    config_without_order = """{
-  "providers": {
-    "first": {
-      "type": "openai",
-      "apiKey": "sk-first"
-    },
-    "second": {
-      "type": "openai",
-      "apiKey": "sk-second"
+    assert [p["name"] for p in providers] == ["late", "early"]
+    assert providers[0] == {
+        "name": "late",
+        "type": "openai",
+        "apiKey": "sk-late",
+        "apiBase": "",
     }
-  },
-  "agents": {
-    "defaults": {
-      "model": "openai/gpt-4o"
-    }
-  }
-}"""
-    cfg = tmp_path / "config.jsonc"
-    cfg.write_text(config_without_order, encoding="utf-8")
-    svc = ConfigService()
-    with patch("bao.config.loader.get_config_path", return_value=cfg):
-        svc.load()
-
-    providers = svc.getProviders()
-    assert [p["name"] for p in providers] == ["first", "second"]
-    assert providers[0]["order"] == 0
-    assert providers[1]["order"] == 1
+    assert "order" not in providers[1]
+    assert "extraHeaders" not in providers[1]
 
 
 def test_save_full_providers_object_with_dotted_name_and_comments(tmp_path):
@@ -323,8 +299,7 @@ def test_save_full_providers_object_with_dotted_name_and_comments(tmp_path):
         '    "openaiCompatible": {\n'
         '      "type": "openai",\n'
         '      "apiKey": "sk-old",\n'
-        '      "apiBase": "https://api.openai.com/v1",\n'
-        '      "order": 0\n'
+        '      "apiBase": "https://api.openai.com/v1"\n'
         "    }\n"
         "  },\n"
         '  "agents": {\n'
@@ -347,7 +322,6 @@ def test_save_full_providers_object_with_dotted_name_and_comments(tmp_path):
                     "type": "openai",
                     "apiKey": "sk-new",
                     "apiBase": "https://api.example.com/v1",
-                    "order": 0,
                 }
             }
         }
@@ -356,5 +330,113 @@ def test_save_full_providers_object_with_dotted_name_and_comments(tmp_path):
     assert ok is True
     written = cfg.read_text(encoding="utf-8")
     assert "// provider config" in written
+    assert '// "provider-name": {' in written
+    assert '//   "extraHeaders": {},' in written
     data = json.loads(_strip_comments(written))
     assert data["providers"]["foo.bar"]["apiKey"] == "sk-new"
+    assert "order" not in data["providers"]["foo.bar"]
+
+
+def test_save_providers_preserves_explicit_ui_order_for_numeric_names(tmp_path):
+    from app.backend.config import ConfigService
+    from app.backend.jsonc_patch import _strip_comments
+
+    config_text = """{
+  "providers": {
+    "alpha": {
+      "type": "openai",
+      "apiKey": "sk-alpha"
+    },
+    "beta": {
+      "type": "openai",
+      "apiKey": "sk-beta"
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": "openai/gpt-4o"
+    }
+  }
+}"""
+    cfg = tmp_path / "config.jsonc"
+    cfg.write_text(config_text, encoding="utf-8")
+    svc = ConfigService()
+    with patch("bao.config.loader.get_config_path", return_value=cfg):
+        svc.load()
+
+    ok = svc.save(
+        {
+            "providers": [
+                {"name": "2", "value": {"type": "openai", "apiKey": "sk-two"}},
+                {"name": "10", "value": {"type": "openai", "apiKey": "sk-ten"}},
+                {"name": "1", "value": {"type": "openai", "apiKey": "sk-one"}},
+            ]
+        }
+    )
+
+    assert ok is True
+    data = json.loads(_strip_comments(cfg.read_text(encoding="utf-8")))
+    assert list(data["providers"].keys()) == ["2", "10", "1"]
+
+
+def test_save_provider_named_provider_name_still_injects_template_comment(tmp_path):
+    from app.backend.config import ConfigService
+
+    config_text = """{
+  "providers": {},
+  "agents": {
+    "defaults": {
+      "model": "openai/gpt-4o"
+    }
+  }
+}"""
+    cfg = tmp_path / "config.jsonc"
+    cfg.write_text(config_text, encoding="utf-8")
+    svc = ConfigService()
+    with patch("bao.config.loader.get_config_path", return_value=cfg):
+        svc.load()
+
+    ok = svc.save(
+        {
+            "providers": {
+                "provider-name": {
+                    "type": "openai",
+                    "apiKey": "sk-real",
+                }
+            }
+        }
+    )
+
+    assert ok is True
+    written = cfg.read_text(encoding="utf-8")
+    assert '// "provider-name": {' in written
+    assert '"provider-name": {' in written
+    assert written.count('// "provider-name": {') == 1
+
+
+def test_save_multiple_missing_channel_siblings_in_default_template(tmp_path):
+    from app.backend.config import ConfigService
+    from app.backend.jsonc_patch import _strip_comments
+    from bao.config.loader import save_config
+    from bao.config.schema import Config
+
+    cfg = tmp_path / "config.jsonc"
+    save_config(Config(), cfg)
+
+    svc = ConfigService()
+    with patch("bao.config.loader.get_config_path", return_value=cfg):
+        svc.load()
+
+    ok = svc.save(
+        {
+            "channels.telegram.enabled": False,
+            "channels.discord.enabled": False,
+            "channels.slack.enabled": False,
+        }
+    )
+
+    assert ok is True
+    data = json.loads(_strip_comments(cfg.read_text(encoding="utf-8")))
+    assert data["channels"]["telegram"]["enabled"] is False
+    assert data["channels"]["discord"]["enabled"] is False
+    assert data["channels"]["slack"]["enabled"] is False

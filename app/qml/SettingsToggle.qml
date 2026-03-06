@@ -42,32 +42,11 @@ Item {
             Layout.fillWidth: true
         }
 
-        Rectangle {
-            id: toggle
-            width: 44; height: 24; radius: 12
-            color: root.toggleOn ? accent : (isDark ? "#252538" : "#D1D5DB")
-            scale: root.toggleOn ? motionHoverScaleSubtle : 1.0
-            Behavior on color { ColorAnimation { duration: motionUi; easing.type: easeStandard } }
-            Behavior on scale { NumberAnimation { duration: motionUi; easing.type: easeEmphasis } }
-
-            Rectangle {
-                width: 18; height: 18; radius: 9
-                color: "#FFFFFF"
-                anchors.verticalCenter: parent.verticalCenter
-                x: root.toggleOn ? parent.width - width - 3 : 3
-                Behavior on x { SmoothedAnimation { velocity: motionTrackVelocity; duration: motionUi } }
-            }
-
-            MouseArea {
-                anchors.fill: parent
-                hoverEnabled: true
-                acceptedButtons: Qt.LeftButton
-                scrollGestureEnabled: false
-                cursorShape: Qt.PointingHandCursor
-                onClicked: {
-                    root.toggleOn = !root.toggleOn
-                    root._dirty = true
-                }
+        ToggleSwitch {
+            checked: root.toggleOn
+            onToggled: function(checked) {
+                root.toggleOn = checked
+                root._dirty = true
             }
         }
     }

@@ -74,6 +74,22 @@ def test_insert_channel_config():
     assert data["channels"]["telegram"]["token"] == "abc"
 
 
+def test_insert_multiple_siblings_into_empty_object():
+    base = '{\n  "channels": {\n    // none yet\n  }\n}'
+    result, errors = patch_jsonc(
+        base,
+        {
+            "channels.telegram": {"enabled": False},
+            "channels.discord": {"enabled": False},
+        },
+    )
+
+    assert not errors
+    data = _parse(result)
+    assert data["channels"]["telegram"]["enabled"] is False
+    assert data["channels"]["discord"]["enabled"] is False
+
+
 def test_insert_keeps_trailing_comment_with_existing_key():
     base = '{\n  "obj": {\n    "a": 1 // keep\n  }\n}'
     result, errors = patch_jsonc(base, {"obj.b": 2})

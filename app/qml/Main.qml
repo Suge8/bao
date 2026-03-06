@@ -44,7 +44,9 @@ ApplicationWindow {
 
     readonly property var stringsZh: ({
         "sidebar_sessions": "会话",
-        "sidebar_no_sessions": "暂无会话",
+        "sidebar_empty_title": "开始一个新对话",
+        "sidebar_empty_hint": "点击即可新建会话",
+        "sidebar_empty_cta": "新建对话",
         "chat_empty_title": "开始对话",
         "chat_empty_hint": "在下面输入消息",
         "chat_gateway": "网关",
@@ -56,7 +58,7 @@ ApplicationWindow {
         "chat_loading_history": "加载会话中…",
         "section_app": "应用",
         "section_updates": "桌面更新",
-        "section_agent_defaults": "代理默认设置",
+        "section_agent_defaults": "回复方式与模型",
         "section_provider": "LLM 提供商",
         "section_channels": "渠道",
         "section_tools": "工具",
@@ -116,7 +118,9 @@ ApplicationWindow {
 
     readonly property var stringsEn: ({
         "sidebar_sessions": "Sessions",
-        "sidebar_no_sessions": "No sessions yet",
+        "sidebar_empty_title": "Start a new chat",
+        "sidebar_empty_hint": "Click to create one",
+        "sidebar_empty_cta": "New chat",
         "chat_empty_title": "Start a conversation",
         "chat_empty_hint": "Type a message below",
         "chat_gateway": "Gateway",
@@ -128,7 +132,7 @@ ApplicationWindow {
         "chat_loading_history": "Loading session\u2026",
         "section_app": "App",
         "section_updates": "Desktop Updates",
-        "section_agent_defaults": "Agent Defaults",
+        "section_agent_defaults": "Response Setup",
         "section_provider": "LLM Provider",
         "section_channels": "Channels",
         "section_tools": "Tools",
@@ -205,6 +209,8 @@ ApplicationWindow {
     readonly property bool setupMode: configService
                                      ? (!configService.isValid || configService.needsSetup)
                                      : true
+    property bool _previousSetupMode: true
+    property int setupCompletionToken: 0
     readonly property int currentPageIndex: {
         if (setupMode)
             return 1
@@ -213,6 +219,11 @@ ApplicationWindow {
         return 0
     }
     onEffectiveLangChanged: if (chatService) chatService.setLanguage(effectiveLang)
+    onSetupModeChanged: {
+        if (_previousSetupMode && !setupMode)
+            setupCompletionToken += 1
+        _previousSetupMode = setupMode
+    }
 
     Component.onCompleted: _applyUiLanguageFromConfig()
 
@@ -224,7 +235,9 @@ ApplicationWindow {
     Connections {
         target: sessionService
         function onDeleteCompleted(_key, ok, error) {
-            if (!ok)
+            if (ok)
+                globalToast.show(strings.session_delete_ok, true)
+            else
                 globalToast.show(strings.session_delete_fail + (error ? (": " + error) : ""), false)
         }
     }
@@ -358,14 +371,20 @@ ApplicationWindow {
     readonly property int sizeFieldPaddingX: 14
     readonly property int sizeOptionHeight: 34
     readonly property int sizeDropdownMaxHeight: 240
-    readonly property int sizeSidebarHeader: 38
-    readonly property int sizeSessionRow: 38
+    readonly property int sizeSidebarHeader: 46
+    readonly property int sizeSessionRow: 40
+    readonly property int sizeSidebarGroupGap: 12
+    readonly property int sizeSidebarHeaderToRowGap: 6
+    readonly property int sizeSidebarGroupInnerGap: 4
     readonly property int sizeCapsuleHeight: 64
     readonly property int sizeBubbleRadius: 18
     readonly property int sizeSystemBubbleRadius: 11
     readonly property int sizeAppIcon: 44
     readonly property int sizeGatewayAction: 44
     readonly property int sizeGatewayActionIcon: 28
+    readonly property int windowContentInsetTop: useMacTransparentTitleBar ? 72 : spacingLg
+    readonly property int windowContentInsetSide: spacingLg
+    readonly property int windowContentInsetBottom: spacingLg
 
     // Gateway emphasis tokens
     readonly property color gatewayTextRunning: isDark ? "#A8EAC3" : "#177C43"
@@ -377,11 +396,29 @@ ApplicationWindow {
     readonly property color gatewaySurfaceErrorTop: isDark ? "#FF6B2527" : "#FFF4C8C8"
 
     // Session emphasis tokens
-    readonly property color sessionRowActiveBg: isDark ? "#68FFA11A" : "#48FFA11A"
-    readonly property color sessionRowHoverBg: isDark ? "#08FFFFFF" : "#06000000"
-    readonly property color sessionRowActiveBorder: isDark ? "#C0FFA11A" : "#A6FFA11A"
-    readonly property color sessionLeadingActiveBg: isDark ? "#78FFA11A" : "#58FFA11A"
-    readonly property color sessionLeadingIdleBg: isDark ? "#10FFFFFF" : "#12000000"
+    readonly property color sidebarListPanelBg: isDark ? "#120A08" : "#FBF2EA"
+    readonly property color sidebarListPanelBorder: isDark ? "#14FFFFFF" : "#12000000"
+    readonly property color sidebarListPanelOverlay: isDark ? "#06FFFFFF" : "#0AFFFFFF"
+    readonly property color sidebarGroupBaseBg: isDark ? "#1A120F" : "#FFF8F1"
+    readonly property color sidebarGroupBg: isDark ? "#1A120F" : "#FFF8F1"
+    readonly property color sidebarGroupHoverBg: isDark ? "#221714" : "#FFF2E8"
+    readonly property color sidebarGroupExpandedBg: isDark ? "#261A16" : "#FFF0E5"
+    readonly property color sidebarGroupBorder: "#00000000"
+    readonly property color sidebarGroupExpandedBorder: "#00000000"
+    readonly property color sidebarGroupHighlight: "#00000000"
+    readonly property color sidebarGroupChevronBg: isDark ? "#16FFFFFF" : "#14000000"
+    readonly property color sidebarGroupChevronBorder: isDark ? "#18FFFFFF" : "#12000000"
+    readonly property color sidebarGroupCountBg: isDark ? "#18FFFFFF" : "#14000000"
+    readonly property color sidebarGroupCountText: isDark ? "#F3DCC8" : "#6B4C35"
+    readonly property color sidebarScrollbarThumb: isDark ? "#20FFFFFF" : "#16000000"
+    readonly property color sidebarHeaderBadgeBg: isDark ? "#26FFD7A8" : "#1CCB8740"
+    readonly property color sidebarHeaderBadgeText: isDark ? "#FFF1DE" : "#6D431E"
+    readonly property color sessionRowIdleBg: isDark ? "#150E0C" : "#FFF9F4"
+    readonly property color sessionRowHoverBg: isDark ? "#1B1311" : "#FFF4EA"
+    readonly property color sessionRowActiveBg: isDark ? "#3A2318" : "#FFD9BC"
+    readonly property color sessionRowIdleBorder: "#00000000"
+    readonly property color sessionRowHoverBorder: "#00000000"
+    readonly property color sessionRowActiveBorder: "#00000000"
     readonly property color sessionDeleteHoverBg: isDark ? "#28F87171" : "#22F87171"
     readonly property color sessionDeleteIdleBg: isDark ? "#14FFFFFF" : "#10000000"
     readonly property color sessionDeleteHoverBorder: "#66F87171"
@@ -555,20 +592,19 @@ ApplicationWindow {
                         Layout.preferredWidth: 240
                         Layout.fillHeight: true
                         visible: !root.setupMode
-                        showingSettings: stack.currentIndex === 1
+                        showingSettings: root.currentPageIndex === 1
                         activeSessionKey: sessionService ? sessionService.activeKey : ""
-                        showChatSelection: stack.currentIndex === 0
-                        onSettingsRequested: stack.currentIndex = 1
+                        showChatSelection: root.currentPageIndex === 0
+                        onSettingsRequested: root.startView = "settings"
                         onNewSessionRequested: if (sessionService) sessionService.newSession("")
                         onSessionSelected: function(key) {
                             if (sessionService) sessionService.selectSession(key)
-                            stack.currentIndex = 0
+                            root.startView = "chat"
                         }
                         onSessionDeleteRequested: function(key) {
                             if (!sessionService)
                                 return
                             sessionService.deleteSession(key)
-                            globalToast.show(strings.session_delete_ok, true)
                         }
                     }
 
@@ -585,11 +621,13 @@ ApplicationWindow {
                             Layout.fillHeight: true
                             clip: true
 
-                            property bool active: stack.currentIndex === 0
+                            property bool active: root.currentPageIndex === 0
                             property real revealOpacity: 1.0
                             property real revealScale: 1.0
                             property real revealShift: 0.0
                             property real revealAuraOpacity: 0.0
+                            property real completionFlashOpacity: 0.0
+                            property real completionFlashScale: 0.94
 
                             function playReveal(direction, distance) {
                                 revealOpacity = motionPageRevealStartOpacity
@@ -597,6 +635,13 @@ ApplicationWindow {
                                 revealShift = direction * distance
                                 revealAuraOpacity = motionPageAuraPeak
                                 chatPageReveal.restart()
+                            }
+
+                            function playSetupCompletionReveal() {
+                                playReveal(-1, motionPageShift + 8)
+                                completionFlashOpacity = 0.24
+                                completionFlashScale = 0.94
+                                setupCompletionReveal.restart()
                             }
 
                             onActiveChanged: {
@@ -612,12 +657,30 @@ ApplicationWindow {
                                 }
                             }
 
+                            Connections {
+                                target: root
+                                function onSetupCompletionTokenChanged() {
+                                    if (chatPage.active)
+                                        chatPage.playSetupCompletionReveal()
+                                }
+                            }
+
                             Rectangle {
                                 anchors.fill: parent
                                 anchors.margins: 8
                                 radius: chrome.radius - 8
                                 color: root.isDark ? "#14FFA11A" : "#0FFFF1DE"
                                 opacity: chatPage.revealAuraOpacity
+                                visible: opacity > 0.01
+                            }
+
+                            Rectangle {
+                                anchors.fill: parent
+                                anchors.margins: 8
+                                radius: chrome.radius - 8
+                                color: root.isDark ? "#20FFD699" : "#1FD0892C"
+                                opacity: chatPage.completionFlashOpacity
+                                scale: chatPage.completionFlashScale
                                 visible: opacity > 0.01
                             }
 
@@ -667,6 +730,33 @@ ApplicationWindow {
                                     }
                                 }
                             }
+
+                            SequentialAnimation {
+                                id: setupCompletionReveal
+                                ParallelAnimation {
+                                    NumberAnimation {
+                                        target: chatPage
+                                        property: "completionFlashOpacity"
+                                        to: 0.0
+                                        duration: motionAmbient
+                                        easing.type: easeStandard
+                                    }
+                                    NumberAnimation {
+                                        target: chatPage
+                                        property: "completionFlashScale"
+                                        to: 1.02
+                                        duration: motionUi
+                                        easing.type: easeEmphasis
+                                    }
+                                }
+                                NumberAnimation {
+                                    target: chatPage
+                                    property: "completionFlashScale"
+                                    to: 1.0
+                                    duration: motionPanel
+                                    easing.type: easeSoft
+                                }
+                            }
                         }
 
                         Item {
@@ -675,7 +765,7 @@ ApplicationWindow {
                             Layout.fillHeight: true
                             clip: true
 
-                            property bool active: stack.currentIndex === 1
+                            property bool active: root.currentPageIndex === 1
                             property real revealOpacity: 1.0
                             property real revealScale: 1.0
                             property real revealShift: 0.0
@@ -714,6 +804,7 @@ ApplicationWindow {
                                     id: settingsView
                                     anchors.fill: parent
                                     appRoot: root
+                                    onboardingMode: root.setupMode
                                 }
                             }
 
@@ -763,6 +854,7 @@ ApplicationWindow {
 
     AppToast {
         id: globalToast
+        objectName: "globalToast"
         anchors.top: parent.top
         anchors.right: parent.right
         anchors.topMargin: 14
