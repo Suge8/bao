@@ -6,6 +6,23 @@ The format follows [Keep a Changelog](https://keepachangelog.com/), and this pro
 
 ## [Unreleased]
 
+## [0.3.9] - 2026-03-06
+
+### Added
+
+- **Desktop setup 首屏引导** — 未完成配置时主窗口直接进入 Settings，并在页面顶部展示 3 步引导，帮助首次启动更快完成 Provider 与模型配置。
+
+### Changed
+
+- **Desktop setup 单一路径收敛** — `Main.qml` 以 `setupMode`/`currentPageIndex` 作为唯一入口事实源；未完成配置时隐藏侧边栏与网关入口，避免进入半配置中间态。
+- **Settings provider 保存语义收敛** — 新增 provider、provider 改名、带 `.` 的 provider 名称以及 `ui.update.*` 配置合并，统一走整块对象写回路径，减少 dot-path 歧义和旧键残留。
+- **Desktop 打包模板资源对齐** — macOS/Windows Nuitka 脚本改为显式打包 `bao/templates/workspace/{en,zh}` 子目录，并在 Windows 构建中关闭控制台窗口，保证安装包资源与运行形态一致。
+
+### Fixed
+
+- **Desktop 配置保存原子化** — `ConfigService.save()` 改为临时文件写入后原子替换，避免写盘中断时留下半写配置。
+- **Desktop GUI 测试组合崩溃** — `test_config_service.py` 统一使用 `QGuiApplication` 基座，修复与 QML 集成测试同进程运行时的 Qt abort。
+
 ## [0.3.8] - 2026-03-06
 
 ### Changed
