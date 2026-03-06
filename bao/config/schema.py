@@ -450,7 +450,14 @@ class ToolsConfig(Base):
 
 
 class UIConfig(Base):
+    class UpdateConfig(Base):
+        enabled: bool = True
+        auto_check: bool = True
+        channel: str = "stable"
+        feed_url: str = "https://suge8.github.io/Bao/desktop-update.json"
+
     language: str = "auto"
+    update: UpdateConfig = Field(default_factory=UpdateConfig)
 
 
 class Config(BaseSettings):
