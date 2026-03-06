@@ -77,7 +77,7 @@ Item {
             radius: radiusSm
             color: field.activeFocus
                    ? bgInputFocus
-                   : (fieldHover.containsMouse ? bgInputHover : bgInput)
+                   : (field.hovered ? bgInputHover : bgInput)
             border.color: field.activeFocus ? borderFocus : borderSubtle
             border.width: field.activeFocus ? 1.5 : 1
 
@@ -87,6 +87,7 @@ Item {
             TextField {
                 id: field
                 anchors.fill: parent
+                hoverEnabled: true
                 leftPadding: sizeFieldPaddingX; rightPadding: sizeFieldPaddingX
                 topPadding: 0; bottomPadding: 0
                 placeholderText: root.placeholder
@@ -98,15 +99,6 @@ Item {
                 selectedTextColor: textSelectionFg
                 verticalAlignment: TextInput.AlignVCenter
                 onTextEdited: root._dirty = true
-            }
-
-            MouseArea {
-                id: fieldHover
-                anchors.fill: parent
-                hoverEnabled: true
-                scrollGestureEnabled: false
-                cursorShape: Qt.IBeamCursor
-                acceptedButtons: Qt.NoButton
             }
         }
 

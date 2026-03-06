@@ -8,6 +8,11 @@ Rectangle {
     color: "transparent"
 
     property var appRoot: null
+    property bool _pendingManualUpdateCheck: false
+    property string updateStateUi: updateService ? updateService.state : "idle"
+    property string updateErrorUi: updateService ? updateService.errorMessage : ""
+    readonly property bool updateBusy: updateStateUi === "checking" || updateStateUi === "downloading" || updateStateUi === "installing"
+    readonly property string updateActionText: updateBusy ? strings.update_action_checking : strings.update_action_check
     readonly property bool isZh: appRoot
                                  ? (appRoot.uiLanguage === "zh" || (appRoot.uiLanguage === "auto" && appRoot.autoLanguage === "zh"))
                                  : false
@@ -26,6 +31,37 @@ Rectangle {
             return tr(name + " 启用时需要填写 Token", name + " requires a token when enabled")
         }
         return msg
+    }
+
+    function _saveUpdateAutoCheck(enabled) {
+        if (!configService)
+            return
+        var uiNode = configService.getValue("ui")
+        var nextUi = (uiNode && typeof uiNode === "object" && !Array.isArray(uiNode)) ? JSON.parse(JSON.stringify(uiNode)) : {}
+        var updateNode = (nextUi.update && typeof nextUi.update === "object" && !Array.isArray(nextUi.update))
+                        ? JSON.parse(JSON.stringify(nextUi.update)) : {}
+        updateNode.autoCheck = enabled
+        nextUi.update = updateNode
+        var ok = configService.save({"ui": nextUi})
+        if (!ok)
+            return
+        if (updateBridge)
+            updateBridge.reloadRequested()
+        toast.show(strings.settings_saved_hint, true)
+    }
+
+    onUpdateStateUiChanged: {
+        if (!_pendingManualUpdateCheck)
+            return
+        if (updateStateUi === "up_to_date") {
+            toast.show(strings.update_status_up_to_date, true)
+            _pendingManualUpdateCheck = false
+            return
+        }
+        if (updateStateUi === "error") {
+            toast.show(updateErrorUi || strings.update_status_error, false)
+            _pendingManualUpdateCheck = false
+        }
     }
 
     function _loadProviders() {
@@ -105,10 +141,14 @@ Rectangle {
         }
     }
 
-    function saveAll() {
+    function saveAll(overrides) {
         if (!configService) return
         var changes = {}
         collectFields(innerCol, changes)
+        if (overrides && typeof overrides === "object" && !Array.isArray(overrides)) {
+            for (var overrideKey in overrides)
+                changes[overrideKey] = overrides[overrideKey]
+        }
 
         var allProviders = configService.getValue("providers")
         var providerEntries = []
@@ -211,13 +251,34 @@ Rectangle {
         }
         for (var d = 0; d < toDelete.length; d++) delete changes[toDelete[d]]
 
-        if (changes.hasOwnProperty("ui.language")) {
-            changes["ui"] = {"language": changes["ui.language"]}
-            delete changes["ui.language"]
+        var hasUiPatch = changes.hasOwnProperty("ui.language")
+        for (var uiKey in changes) {
+            if (uiKey.indexOf("ui.update.") === 0)
+                hasUiPatch = true
+        }
+        if (hasUiPatch) {
+            var uiNode = configService.getValue("ui")
+            var nextUi = (uiNode && typeof uiNode === "object" && !Array.isArray(uiNode)) ? JSON.parse(JSON.stringify(uiNode)) : {}
+            if (changes.hasOwnProperty("ui.language")) {
+                nextUi["language"] = changes["ui.language"]
+                delete changes["ui.language"]
+            }
+            var updateNode = (nextUi.update && typeof nextUi.update === "object" && !Array.isArray(nextUi.update))
+                            ? JSON.parse(JSON.stringify(nextUi.update)) : {}
+            for (var updateKey in changes) {
+                if (updateKey.indexOf("ui.update.") !== 0)
+                    continue
+                updateNode[updateKey.substring("ui.update.".length)] = changes[updateKey]
+                delete changes[updateKey]
+            }
+            nextUi.update = updateNode
+            changes["ui"] = nextUi
         }
 
         var ok = configService.save(changes)
         if (ok) {
+            if (updateBridge)
+                updateBridge.reloadRequested()
             toast.show(strings.settings_saved_hint, true)
             root._loadProviders()
         }
@@ -293,7 +354,7 @@ Rectangle {
 
                     ColumnLayout {
                         width: parent.width
-                        spacing: spacingMd
+                        spacing: 10
 
                         SettingsSelect {
                             label: strings.ui_language
@@ -307,6 +368,107 @@ Rectangle {
                                 if (root.appRoot) root.appRoot.uiLanguage = v
                                 if (configService && configService.isValid) {
                                     configService.save({"ui": {"language": v}})
+                                }
+                            }
+                        }
+                    }
+                }
+
+                SettingsSection {
+                    Layout.fillWidth: true
+                    title: strings.section_updates
+
+                    RowLayout {
+                        width: parent.width
+                        Layout.fillWidth: true
+                        spacing: 14
+
+                        RowLayout {
+                            spacing: 10
+
+                            Text {
+                                text: strings.update_auto_check
+                                color: textSecondary
+                                font.pixelSize: typeLabel
+                                font.weight: weightMedium
+                            }
+
+                            Rectangle {
+                                id: toggle
+                                width: 44
+                                height: 24
+                                radius: 12
+                                color: autoUpdateOn ? accent : (isDark ? "#252538" : "#D1D5DB")
+                                scale: autoUpdateOn ? motionHoverScaleSubtle : 1.0
+                                property bool autoUpdateOn: {
+                                    var current = configService ? configService.getValue("ui.update.autoCheck") : undefined
+                                    return current === true
+                                }
+                                Behavior on color { ColorAnimation { duration: motionUi; easing.type: easeStandard } }
+                                Behavior on scale { NumberAnimation { duration: motionUi; easing.type: easeEmphasis } }
+
+                                Rectangle {
+                                    width: 18
+                                    height: 18
+                                    radius: 9
+                                    color: "#FFFFFF"
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    x: toggle.autoUpdateOn ? parent.width - width - 3 : 3
+                                    Behavior on x { SmoothedAnimation { velocity: motionTrackVelocity; duration: motionUi } }
+                                }
+
+                                MouseArea {
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    acceptedButtons: Qt.LeftButton
+                                    scrollGestureEnabled: false
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: root._saveUpdateAutoCheck(!toggle.autoUpdateOn)
+                                }
+                            }
+                        }
+
+                        Item {
+                            Layout.fillWidth: true
+                        }
+
+                        RowLayout {
+                            Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
+                            spacing: 12
+
+                            Text {
+                                text: strings.update_current_version + " " + (updateService ? updateService.currentVersion : "")
+                                color: textSecondary
+                                font.pixelSize: typeMeta
+                                verticalAlignment: Text.AlignVCenter
+                            }
+
+                            Rectangle {
+                                implicitWidth: checkLabel.implicitWidth + 28
+                                implicitHeight: 30
+                                radius: 15
+                                color: updateAction.containsMouse ? accentHover : accent
+                                opacity: root.updateBusy ? 0.72 : 1.0
+
+                                Text {
+                                    id: checkLabel
+                                    anchors.centerIn: parent
+                                    text: root.updateActionText
+                                    color: "#FFFFFFFF"
+                                    font.pixelSize: typeLabel
+                                    font.weight: Font.DemiBold
+                                }
+
+                                MouseArea {
+                                    id: updateAction
+                                    anchors.fill: parent
+                                    enabled: updateBridge !== null && !root.updateBusy
+                                    hoverEnabled: true
+                                    cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+                                    onClicked: {
+                                        root._pendingManualUpdateCheck = true
+                                        updateBridge.checkRequested()
+                                    }
                                 }
                             }
                         }
@@ -476,6 +638,7 @@ Rectangle {
                                             anchors.top: parent.top
                                             anchors.bottom: parent.bottom
                                             anchors.rightMargin: 36
+                                            hoverEnabled: true
                                             acceptedButtons: Qt.LeftButton
                                             scrollGestureEnabled: false
                                             cursorShape: Qt.PointingHandCursor
@@ -856,6 +1019,121 @@ Rectangle {
         errorBg: isDark ? "#B84040" : "#DC2626"
         textColor: "#FFFFFF"
         duration: toastDurationLong
+    }
+
+    Rectangle {
+        anchors.fill: parent
+        visible: root._pendingManualUpdateCheck && updateService && updateService.state === "available"
+        z: 22
+        color: isDark ? "#A6000000" : "#66000000"
+
+        MouseArea {
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: root._pendingManualUpdateCheck = false
+        }
+
+        Rectangle {
+            width: Math.min(root.width - 48, 460)
+            anchors.centerIn: parent
+            radius: radiusLg
+            color: bgElevated
+            border.width: 1
+            border.color: borderDefault
+            implicitHeight: dialogCol.implicitHeight + 28
+
+            ColumnLayout {
+                id: dialogCol
+                anchors.fill: parent
+                anchors.margins: 14
+                spacing: 12
+
+                Text {
+                    Layout.fillWidth: true
+                    text: strings.update_modal_title
+                    color: textPrimary
+                    font.pixelSize: typeTitle
+                    font.weight: Font.DemiBold
+                    wrapMode: Text.WordWrap
+                }
+
+                Text {
+                    Layout.fillWidth: true
+                    text: strings.update_latest_version + " " + (updateService ? updateService.latestVersion : "")
+                    color: textSecondary
+                    font.pixelSize: typeBody
+                    wrapMode: Text.WordWrap
+                    visible: updateService !== null && !!updateService.latestVersion
+                }
+
+                Text {
+                    Layout.fillWidth: true
+                    text: updateService ? updateService.notesMarkdown : ""
+                    color: textSecondary
+                    font.pixelSize: typeMeta
+                    wrapMode: Text.WordWrap
+                    visible: updateService !== null && !!updateService.notesMarkdown
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 8
+
+                    Rectangle {
+                        Layout.fillWidth: true
+                        implicitHeight: 38
+                        radius: 19
+                        color: dialogLater.containsMouse ? bgCardHover : "transparent"
+                        border.width: 1
+                        border.color: borderSubtle
+
+                        Text {
+                            anchors.centerIn: parent
+                            text: strings.update_modal_later
+                            color: textSecondary
+                            font.pixelSize: typeLabel
+                            font.weight: Font.Medium
+                        }
+
+                        MouseArea {
+                            id: dialogLater
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: root._pendingManualUpdateCheck = false
+                        }
+                    }
+
+                    Rectangle {
+                        Layout.fillWidth: true
+                        implicitHeight: 38
+                        radius: 19
+                        color: dialogInstall.containsMouse ? accentHover : accent
+
+                        Text {
+                            anchors.centerIn: parent
+                            text: strings.update_modal_install
+                            color: "#FFFFFFFF"
+                            font.pixelSize: typeLabel
+                            font.weight: Font.DemiBold
+                        }
+
+                        MouseArea {
+                            id: dialogInstall
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                root._pendingManualUpdateCheck = false
+                                if (updateBridge)
+                                    updateBridge.installRequested()
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     Connections {

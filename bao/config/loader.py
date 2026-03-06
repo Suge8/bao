@@ -271,6 +271,20 @@ _JSONC_TEMPLATE = """\
       //   "maxTools": 16
       // }
     }
+  },
+  // ───────────────────────────────────────────────────────────────
+  //  🖥️ Desktop UI | 桌面界面
+  // ───────────────────────────────────────────────────────────────
+  "ui": {
+    "language": "auto",
+    "update": {
+      // 桌面端更新：默认使用 GitHub Pages 上的稳定 feed
+      // Desktop updates: defaults to the stable feed hosted on GitHub Pages
+      "enabled": true,
+      "autoCheck": true,
+      "channel": "stable",
+      "feedUrl": "https://suge8.github.io/Bao/desktop-update.json"
+    }
   }
 }
 """
@@ -355,6 +369,7 @@ def _handle_config_error(path: Path, error: Exception) -> Config:
     parts.append("")
     print("\n".join(parts))
     return Config()
+
 
 def _apply_env_overlay(data: dict[str, Any]) -> dict[str, Any]:
     """Deep-merge BAO_* env vars into config data. Env wins over file."""

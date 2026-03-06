@@ -116,7 +116,7 @@ class ConfigService(QObject):
             if parsed_data is None:
                 raise ValueError("Top-level config must be an object")
             self._data = parsed_data
-            _ = RuntimeConfig.model_validate(self._data)
+            validated = RuntimeConfig.model_validate(self._data)
             dotted = self._data.get("ui.language")
             if isinstance(dotted, str):
                 ui_node = _as_dict(self._data.get("ui"))
@@ -124,6 +124,7 @@ class ConfigService(QObject):
                     ui_node = {}
                     self._data["ui"] = ui_node
                 _ = ui_node.setdefault("language", dotted)
+            self._apply_ui_defaults(validated)
             self._valid = True
             self._notify_state_changed()
             self.configLoaded.emit()
@@ -286,6 +287,24 @@ class ConfigService(QObject):
     def _notify_state_changed(self) -> None:
         """Emit stateChanged so QML re-evaluates isValid / needsSetup."""
         self.stateChanged.emit()
+
+    def _apply_ui_defaults(self, validated: RuntimeConfig) -> None:
+        ui_node = _as_dict(self._data.get("ui"))
+        if ui_node is None:
+            ui_node = {}
+            self._data["ui"] = ui_node
+        _ = ui_node.setdefault("language", validated.ui.language)
+
+        update_node = _as_dict(ui_node.get("update"))
+        if update_node is None:
+            update_node = {}
+            ui_node["update"] = update_node
+
+        defaults = validated.ui.update
+        _ = update_node.setdefault("enabled", defaults.enabled)
+        _ = update_node.setdefault("autoCheck", defaults.auto_check)
+        _ = update_node.setdefault("channel", defaults.channel)
+        _ = update_node.setdefault("feedUrl", defaults.feed_url)
 
     def _collapse_missing_intermediates(self, changes: dict[str, object]) -> dict[str, object]:
         """Collapse dotpaths whose intermediate keys don't exist in self._data.

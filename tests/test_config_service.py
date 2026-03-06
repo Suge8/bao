@@ -117,6 +117,37 @@ def test_save_reasoning_effort_off(tmp_path):
     assert data["agents"]["defaults"]["reasoningEffort"] == "off"
 
 
+def test_save_ui_update_config(tmp_path):
+    from app.backend.config import ConfigService
+    from app.backend.jsonc_patch import _strip_comments
+
+    cfg = tmp_path / "config.jsonc"
+    cfg.write_text(MINIMAL_CONFIG, encoding="utf-8")
+    svc = ConfigService()
+    with patch("bao.config.loader.get_config_path", return_value=cfg):
+        svc.load()
+
+    ok = svc.save(
+        {
+            "ui": {
+                "language": "zh",
+                "update": {
+                    "enabled": True,
+                    "autoCheck": True,
+                    "channel": "stable",
+                    "feedUrl": "https://suge8.github.io/Bao/desktop-update.json",
+                },
+            }
+        }
+    )
+    assert ok is True
+
+    data = json.loads(_strip_comments(cfg.read_text(encoding="utf-8")))
+    assert data["ui"]["update"]["channel"] == "stable"
+    assert data["ui"]["update"]["enabled"] is True
+    assert data["ui"]["update"]["feedUrl"] == "https://suge8.github.io/Bao/desktop-update.json"
+
+
 def test_save_after_missing_load_marks_valid(tmp_path):
     from app.backend.config import ConfigService
 

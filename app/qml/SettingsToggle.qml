@@ -60,6 +60,7 @@ Item {
 
             MouseArea {
                 anchors.fill: parent
+                hoverEnabled: true
                 acceptedButtons: Qt.LeftButton
                 scrollGestureEnabled: false
                 cursorShape: Qt.PointingHandCursor

@@ -79,7 +79,7 @@ Item {
             radius: radiusSm
             color: combo.activeFocus
                    ? bgInputFocus
-                   : (hover.containsMouse ? bgInputHover : bgInput)
+                   : (comboArea.containsMouse ? bgInputHover : bgInput)
             border.color: combo.activeFocus ? borderFocus : borderSubtle
             border.width: combo.activeFocus ? 1.5 : 1
 
@@ -182,12 +182,17 @@ Item {
             }
 
             MouseArea {
-                id: hover
+                id: comboArea
                 anchors.fill: parent
                 hoverEnabled: true
+                acceptedButtons: Qt.LeftButton
                 scrollGestureEnabled: false
                 cursorShape: Qt.PointingHandCursor
-                acceptedButtons: Qt.NoButton
+                onClicked: {
+                    combo.forceActiveFocus()
+                    if (combo.popup.visible) combo.popup.close()
+                    else combo.popup.open()
+                }
             }
         }
     }
