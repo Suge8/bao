@@ -12,6 +12,7 @@ from loguru import logger
 from bao.bus.events import OutboundMessage
 from bao.bus.queue import MessageBus
 from bao.channels.base import BaseChannel
+from bao.channels.progress_text import EditingProgress
 from bao.config.schema import DiscordConfig
 
 DISCORD_API_BASE = "https://discord.com/api/v10"
@@ -49,11 +50,18 @@ class DiscordChannel(BaseChannel):
     def __init__(self, config: DiscordConfig, bus: MessageBus):
         super().__init__(config, bus)
         self.config: DiscordConfig = config
-        self._ws: websockets.WebSocketClientProtocol | None = None
+        self._ws: Any = None
         self._seq: int | None = None
-        self._heartbeat_task: asyncio.Task | None = None
-        self._typing_tasks: dict[str, asyncio.Task] = {}
+        self._heartbeat_task: asyncio.Task[None] | None = None
+        self._typing_tasks: dict[str, asyncio.Task[None]] = {}
         self._http: httpx.AsyncClient | None = None
+        self._progress_reply_to: dict[str, str | None] = {}
+        self._progress_handler = EditingProgress(
+            self._create_progress_text,
+            self._update_progress_text,
+            self._send_text,
+            split_fn=_split_message,
+        )
         # RESUME support
         self._session_id: str | None = None
         self._resume_gateway_url: str | None = None
@@ -87,6 +95,8 @@ class DiscordChannel(BaseChannel):
 
     async def stop(self) -> None:
         """Stop the Discord channel."""
+        self._clear_progress()
+        self._progress_reply_to.clear()
         self._running = False
         if self._heartbeat_task:
             self._heartbeat_task.cancel()
@@ -107,35 +117,54 @@ class DiscordChannel(BaseChannel):
             logger.warning("⚠️ 未初始化 / client not initialized: Discord HTTP")
             return
 
-        url = f"{DISCORD_API_BASE}/channels/{msg.chat_id}/messages"
-        token = self.config.token.get_secret_value()
-        headers = {"Authorization": f"Bot {token}"}
+        self._progress_reply_to[msg.chat_id] = msg.reply_to
 
         try:
-            chunks = _split_message(msg.content or "")
-            if not chunks:
-                return
-
-            for i, chunk in enumerate(chunks):
-                payload: dict[str, Any] = {"content": chunk}
-
-                # Only set reply reference on the first chunk
-                if i == 0 and msg.reply_to:
-                    payload["message_reference"] = {"message_id": msg.reply_to}
-                    payload["allowed_mentions"] = {"replied_user": False}
-
-                if not await self._send_payload(url, headers, payload):
-                    break  # Abort remaining chunks on failure
+            await self._dispatch_progress_text(msg, flush_progress=True)
+            meta = msg.metadata or {}
+            if bool(meta.get("_progress_clear")) or not bool(meta.get("_progress")):
+                self._progress_reply_to.pop(msg.chat_id, None)
         finally:
             await self._stop_typing(msg.chat_id)
 
+    async def _send_text(self, chat_id: str, text: str) -> None:
+        url = f"{DISCORD_API_BASE}/channels/{chat_id}/messages"
+        payload: dict[str, Any] = {"content": text}
+        reply_to = self._progress_reply_to.get(chat_id)
+        if reply_to:
+            payload["message_reference"] = {"message_id": reply_to}
+            payload["allowed_mentions"] = {"replied_user": False}
+        await self._send_payload(url, payload)
+
+    async def _create_progress_text(self, chat_id: str, text: str) -> str | None:
+        url = f"{DISCORD_API_BASE}/channels/{chat_id}/messages"
+        payload: dict[str, Any] = {"content": text}
+        reply_to = self._progress_reply_to.get(chat_id)
+        if reply_to:
+            payload["message_reference"] = {"message_id": reply_to}
+            payload["allowed_mentions"] = {"replied_user": False}
+        response = await self._send_payload(url, payload)
+        return str(response.get("id", "")) if response else None
+
+    async def _update_progress_text(
+        self, chat_id: str, handle: str | None, text: str
+    ) -> str | None:
+        if not handle:
+            return None
+        url = f"{DISCORD_API_BASE}/channels/{chat_id}/messages/{handle}"
+        response = await self._send_payload(url, {"content": text}, method="PATCH")
+        return str(response.get("id", handle)) if response else handle
+
     async def _send_payload(
-        self, url: str, headers: dict[str, str], payload: dict[str, Any]
-    ) -> bool:
-        """Send a single Discord API payload with retry on rate-limit. Returns True on success."""
+        self, url: str, payload: dict[str, Any], *, method: str = "POST"
+    ) -> dict[str, Any] | None:
+        if not self._http:
+            return None
+        token = self.config.token.get_secret_value()
+        headers = {"Authorization": f"Bot {token}"}
         for attempt in range(3):
             try:
-                response = await self._http.post(url, headers=headers, json=payload)
+                response = await self._http.request(method, url, headers=headers, json=payload)
                 if response.status_code == 429:
                     data = response.json()
                     retry_after = float(data.get("retry_after", 1.0))
@@ -143,13 +172,14 @@ class DiscordChannel(BaseChannel):
                     await asyncio.sleep(retry_after)
                     continue
                 response.raise_for_status()
-                return True
+                data = response.json()
+                return data if isinstance(data, dict) else {}
             except Exception as e:
                 if attempt == 2:
                     logger.error("❌ 发送失败 / send failed: {}", e)
                 else:
                     await asyncio.sleep(1)
-        return False
+        return None
 
     async def _gateway_loop(self) -> None:
         """Main gateway loop: identify/resume, heartbeat, dispatch events."""
@@ -340,7 +370,10 @@ class DiscordChannel(BaseChannel):
             consecutive_failures = 0
             while self._running:
                 try:
-                    await self._http.post(url, headers=headers)
+                    http = self._http
+                    if http is None:
+                        break
+                    await http.post(url, headers=headers)
                     consecutive_failures = 0
                 except Exception:
                     consecutive_failures += 1

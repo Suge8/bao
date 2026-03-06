@@ -26,6 +26,28 @@ class _DummyChannel(BaseChannel):
         self.sent.append(msg)
 
 
+class _DummyProgressHandler:
+    async def handle(self, *_args, **_kwargs) -> None:
+        return None
+
+    async def flush(self, *_args, **_kwargs) -> None:
+        return None
+
+    def clear_all(self) -> None:
+        return None
+
+
+class _FailingStartChannel(_DummyChannel):
+    async def start(self) -> None:
+        raise RuntimeError("boom-start")
+
+
+class _FailingSendChannel(_DummyChannel):
+    async def send(self, msg: OutboundMessage) -> None:
+        _ = msg
+        raise RuntimeError("boom-send")
+
+
 def _dispatch_one(
     manager: ChannelManager, bus: MessageBus, msg: OutboundMessage, channel: _DummyChannel
 ) -> None:
@@ -53,7 +75,7 @@ def test_tool_hint_suppressed_keeps_iteration_boundary() -> None:
 
     manager = ChannelManager(cfg, bus)
     dummy = _DummyChannel(bus)
-    setattr(dummy, "_progress", object())
+    dummy._progress_handler = _DummyProgressHandler()
     manager.channels = {"dummy": dummy}
 
     _dispatch_one(
@@ -93,6 +115,30 @@ def test_tool_hint_dropped_when_progress_also_disabled() -> None:
             chat_id="c2",
             content='web_fetch("https://example.com")',
             metadata={"_progress": True, "_tool_hint": True, "_progress_kind": "tool"},
+        ),
+        dummy,
+    )
+
+    assert dummy.sent == []
+
+
+def test_progress_dropped_for_channels_without_progress_handler() -> None:
+    bus = MessageBus()
+    cfg = Config()
+    cfg.agents.defaults.send_progress = True
+
+    manager = ChannelManager(cfg, bus)
+    dummy = _DummyChannel(bus)
+    manager.channels = {"dummy": dummy}
+
+    _dispatch_one(
+        manager,
+        bus,
+        OutboundMessage(
+            channel="dummy",
+            chat_id="c-progress",
+            content="流式增量",
+            metadata={"_progress": True},
         ),
         dummy,
     )
@@ -266,3 +312,40 @@ def test_invalid_claudecode_meta_is_left_unchanged() -> None:
     sent = dummy.sent[0]
     assert sent.content == content
     assert "_claudecode_meta" not in sent.metadata
+
+
+def test_channel_start_failure_reports_callback() -> None:
+    bus = MessageBus()
+    cfg = Config()
+    reported: list[tuple[str, str, str]] = []
+    manager = ChannelManager(
+        cfg,
+        bus,
+        on_channel_error=lambda stage, name, detail: reported.append((stage, name, detail)),
+    )
+
+    asyncio.run(manager._start_channel("telegram", _FailingStartChannel(bus)))
+
+    assert reported == [("start_failed", "telegram", "boom-start")]
+
+
+def test_channel_send_failure_reports_callback() -> None:
+    bus = MessageBus()
+    cfg = Config()
+    reported: list[tuple[str, str, str]] = []
+    manager = ChannelManager(
+        cfg,
+        bus,
+        on_channel_error=lambda stage, name, detail: reported.append((stage, name, detail)),
+    )
+    failing = _FailingSendChannel(bus)
+    manager.channels = {"telegram": failing}
+
+    _dispatch_one(
+        manager,
+        bus,
+        OutboundMessage(channel="telegram", chat_id="c-send", content="hello", metadata={}),
+        failing,
+    )
+
+    assert reported == [("send_failed", "telegram", "boom-send")]

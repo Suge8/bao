@@ -28,7 +28,7 @@ class IMessageChannel(BaseChannel):
         self.config: IMessageConfig = config
         self._last_rowid: int = 0
         self._poll_interval: float = config.poll_interval
-        self._progress = ProgressBuffer(self._send_text)
+        self._progress_handler = ProgressBuffer(self._send_text)
 
     async def start(self) -> None:
         self.mark_not_ready()
@@ -53,19 +53,12 @@ class IMessageChannel(BaseChannel):
             await asyncio.sleep(self._poll_interval)
 
     async def stop(self) -> None:
-        self._progress.clear_all()
+        self._clear_progress()
         self._running = False
         self.mark_not_ready()
 
     async def send(self, msg: OutboundMessage) -> None:
-        meta = msg.metadata or {}
-        await self._progress.handle(
-            msg.chat_id,
-            msg.content or "",
-            is_progress=bool(meta.get("_progress")),
-            is_tool_hint=bool(meta.get("_tool_hint")),
-            clear_only=bool(meta.get("_progress_clear")),
-        )
+        await self._dispatch_progress_text(msg, flush_progress=False)
         for file_path in msg.media or []:
             if Path(file_path).is_file():
                 await self._send_file(msg.chat_id, file_path)

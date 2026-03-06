@@ -41,6 +41,32 @@ async def test_telegram_acl_blocks_media_download_before_get_file() -> None:
 
 
 @pytest.mark.asyncio
+async def test_telegram_acl_accepts_numeric_id_from_composite_sender() -> None:
+    bus = MagicMock()
+    cfg = TelegramConfig(enabled=True, token="token", allow_from=["123"])
+    channel = TelegramChannel(cfg, bus)
+
+    channel._handle_message = AsyncMock()
+    message = SimpleNamespace(
+        chat_id=123,
+        text="hi",
+        caption=None,
+        photo=None,
+        voice=None,
+        audio=None,
+        document=None,
+        message_id=77,
+        chat=SimpleNamespace(type="private"),
+    )
+    user = SimpleNamespace(id=123, username="alice", first_name="u")
+    update = SimpleNamespace(message=message, effective_user=user)
+
+    await channel._on_message(update, None)
+
+    channel._handle_message.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_whatsapp_acl_blocks_media_save_before_write() -> None:
     bus = MagicMock()
     cfg = WhatsAppConfig(enabled=True, allow_from=["999"])

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Callable
 from typing import Any
 
 from loguru import logger
@@ -24,14 +25,33 @@ class ChannelManager:
     - Route outbound messages
     """
 
-    def __init__(self, config: Config, bus: MessageBus):
+    def __init__(
+        self,
+        config: Config,
+        bus: MessageBus,
+        on_channel_error: Callable[[str, str, str], None] | None = None,
+    ):
         self.config = config
         self.bus = bus
         self.channels: dict[str, BaseChannel] = {}
         self._dispatch_task: asyncio.Task[None] | None = None
         self._started = asyncio.Event()
+        self._on_channel_error = on_channel_error
 
         self._init_channels()
+
+    def _report_channel_error(self, stage: str, name: str, detail: Any) -> None:
+        callback = self._on_channel_error
+        if callback is None:
+            return
+        try:
+            callback(stage, name, str(detail))
+        except Exception as exc:
+            logger.debug("Skip channel error callback {} {}: {}", stage, name, exc)
+
+    def _report_unavailable(self, name: str, detail: Any) -> None:
+        logger.warning("⚠️ 通道不可用 / unavailable: {} {}", name, detail)
+        self._report_channel_error("unavailable", name.lower(), detail)
 
     def _init_channels(self) -> None:
         """Initialize channels based on config."""
@@ -49,7 +69,7 @@ class ChannelManager:
                 )
                 logger.debug("Telegram channel enabled")
             except ImportError as e:
-                logger.warning("⚠️ 通道不可用 / unavailable: Telegram {}", e)
+                self._report_unavailable("Telegram", e)
 
         # WhatsApp channel
         if self.config.channels.whatsapp.enabled:
@@ -59,7 +79,7 @@ class ChannelManager:
                 self.channels["whatsapp"] = WhatsAppChannel(self.config.channels.whatsapp, self.bus)
                 logger.debug("WhatsApp channel enabled")
             except ImportError as e:
-                logger.warning("⚠️ 通道不可用 / unavailable: WhatsApp {}", e)
+                self._report_unavailable("WhatsApp", e)
 
         # Discord channel
         if self.config.channels.discord.enabled:
@@ -69,7 +89,7 @@ class ChannelManager:
                 self.channels["discord"] = DiscordChannel(self.config.channels.discord, self.bus)
                 logger.debug("Discord channel enabled")
             except ImportError as e:
-                logger.warning("⚠️ 通道不可用 / unavailable: Discord {}", e)
+                self._report_unavailable("Discord", e)
 
         # Feishu channel
         if self.config.channels.feishu.enabled:
@@ -80,9 +100,9 @@ class ChannelManager:
                     self.channels["feishu"] = FeishuChannel(self.config.channels.feishu, self.bus)
                     logger.debug("Feishu channel enabled")
                 else:
-                    logger.warning("⚠️ 通道不可用 / unavailable: Feishu sdk missing")
+                    self._report_unavailable("Feishu", "sdk missing")
             except ImportError as e:
-                logger.warning("⚠️ 通道不可用 / unavailable: Feishu {}", e)
+                self._report_unavailable("Feishu", e)
 
         # Mochat channel
         if self.config.channels.mochat.enabled:
@@ -92,7 +112,7 @@ class ChannelManager:
                 self.channels["mochat"] = MochatChannel(self.config.channels.mochat, self.bus)
                 logger.debug("Mochat channel enabled")
             except ImportError as e:
-                logger.warning("⚠️ 通道不可用 / unavailable: Mochat {}", e)
+                self._report_unavailable("Mochat", e)
 
         # DingTalk channel
         if self.config.channels.dingtalk.enabled:
@@ -105,9 +125,9 @@ class ChannelManager:
                     )
                     logger.debug("DingTalk channel enabled")
                 else:
-                    logger.warning("⚠️ 通道不可用 / unavailable: DingTalk sdk missing")
+                    self._report_unavailable("DingTalk", "sdk missing")
             except ImportError as e:
-                logger.warning("⚠️ 通道不可用 / unavailable: DingTalk {}", e)
+                self._report_unavailable("DingTalk", e)
 
         # Email channel
         if self.config.channels.email.enabled:
@@ -117,7 +137,7 @@ class ChannelManager:
                 self.channels["email"] = EmailChannel(self.config.channels.email, self.bus)
                 logger.debug("Email channel enabled")
             except ImportError as e:
-                logger.warning("⚠️ 通道不可用 / unavailable: Email {}", e)
+                self._report_unavailable("Email", e)
 
         # Slack channel
         if self.config.channels.slack.enabled:
@@ -127,7 +147,7 @@ class ChannelManager:
                 self.channels["slack"] = SlackChannel(self.config.channels.slack, self.bus)
                 logger.debug("Slack channel enabled")
             except ImportError as e:
-                logger.warning("⚠️ 通道不可用 / unavailable: Slack {}", e)
+                self._report_unavailable("Slack", e)
 
         # QQ channel
         if self.config.channels.qq.enabled:
@@ -141,9 +161,9 @@ class ChannelManager:
                     )
                     logger.debug("QQ channel enabled")
                 else:
-                    logger.warning("⚠️ 通道不可用 / unavailable: QQ sdk missing")
+                    self._report_unavailable("QQ", "sdk missing")
             except ImportError as e:
-                logger.warning("⚠️ 通道不可用 / unavailable: QQ {}", e)
+                self._report_unavailable("QQ", e)
 
         # iMessage channel (macOS only)
         if self.config.channels.imessage.enabled:
@@ -153,7 +173,7 @@ class ChannelManager:
                 self.channels["imessage"] = IMessageChannel(self.config.channels.imessage, self.bus)
                 logger.debug("iMessage channel enabled")
             except ImportError as e:
-                logger.warning("⚠️ 通道不可用 / unavailable: iMessage {}", e)
+                self._report_unavailable("iMessage", e)
 
     async def _start_channel(self, name: str, channel: BaseChannel) -> None:
         """Start a channel and log any exceptions."""
@@ -161,6 +181,7 @@ class ChannelManager:
             await channel.start()
         except Exception as e:
             logger.error("❌ 启动失败 / start failed: {}: {}", name, e)
+            self._report_channel_error("start_failed", name, e)
 
     async def start_all(self) -> None:
         """Start all channels and the outbound dispatcher."""
@@ -211,6 +232,7 @@ class ChannelManager:
                 logger.info("✅ 已停止 / stopped: {}", name)
             except Exception as e:
                 logger.error("❌ 停止失败 / stop failed: {}: {}", name, e)
+                self._report_channel_error("stop_failed", name, e)
 
     async def _dispatch_outbound(self) -> None:
         """Dispatch outbound messages to the appropriate channel.
@@ -228,13 +250,13 @@ class ChannelManager:
                         logger.warning("⚠️ 未知通道 / unknown channel: {}", msg.channel)
                     continue
                 if msg.metadata.get("_progress"):
+                    if not channel.supports_progress:
+                        continue
                     is_tool_hint = msg.metadata.get("_tool_hint", False)
                     allow_tool_hints = defaults.send_tool_hints
                     allow_progress = defaults.send_progress
                     if is_tool_hint and not allow_tool_hints:
                         if not allow_progress:
-                            continue
-                        if not hasattr(channel, "_progress"):
                             continue
                         suppressed_meta = dict(msg.metadata)
                         suppressed_meta["_tool_hint_suppressed"] = True
@@ -253,6 +275,7 @@ class ChannelManager:
                     await channel.send(msg)
                 except Exception as e:
                     logger.error("❌ 发送失败 / send failed: {}: {}", msg.channel, e)
+                    self._report_channel_error("send_failed", msg.channel, e)
             except asyncio.TimeoutError:
                 continue
             except asyncio.CancelledError:
