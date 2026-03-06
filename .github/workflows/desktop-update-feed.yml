@@ -1,0 +1,61 @@
+name: Desktop Update Feed
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: desktop-update-feed
+  cancel-in-progress: true
+
+jobs:
+  publish-feed:
+    if: startsWith(github.event.release.tag_name, 'v')
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      TAG: ${{ github.event.release.tag_name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Download desktop update assets
+        run: |
+          mkdir -p .updates/assets
+          gh release download "$TAG" \
+            --repo "$REPO" \
+            --dir .updates/assets \
+            --pattern 'Bao-*-macos-*-update.zip' \
+            --pattern 'Bao-*-windows-x64-setup.exe'
+
+      - name: Export release metadata
+        run: gh release view "$TAG" --repo "$REPO" --json tagName,url,publishedAt,body > .updates/release.json
+
+      - name: Generate stable update feed
+        run: |
+          python app/scripts/generate_update_feed.py \
+            --release-json .updates/release.json \
+            --assets-dir .updates/assets \
+            --repo "$REPO" \
+            --channel stable \
+            --output .updates/site/desktop-update.json
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: .updates/site
+
+      - name: Deploy to GitHub Pages
+        uses: actions/deploy-pages@v4

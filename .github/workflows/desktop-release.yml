@@ -21,7 +21,20 @@ env:
   PYTHON_VERSION: '3.11'
 
 jobs:
+  validate-version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Validate release version wiring
+        run: python app/scripts/validate_release_version.py --github-ref "${GITHUB_REF}"
+
   build-mac:
+    needs: validate-version
     strategy:
       fail-fast: false
       matrix:
@@ -86,14 +99,20 @@ jobs:
       - name: Create DMG
         run: bash app/scripts/create_dmg.sh --arch ${{ matrix.arch }}
 
+      - name: Create update zip
+        run: bash app/scripts/create_update_zip.sh --arch ${{ matrix.arch }}
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: bao-macos-${{ matrix.arch }}
-          path: dist/*.dmg
+          path: |
+            dist/*.dmg
+            dist/*-update.zip
           retention-days: 14
 
   build-windows:
+    needs: validate-version
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -179,4 +198,6 @@ jobs:
           files: |
             artifacts/bao-macos-arm64/*.dmg
             artifacts/bao-macos-x86_64/*.dmg
+            artifacts/bao-macos-arm64/*-update.zip
+            artifacts/bao-macos-x86_64/*-update.zip
             artifacts/bao-windows-x64/*.exe
