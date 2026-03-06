@@ -4,6 +4,7 @@ import asyncio
 import re
 
 from loguru import logger
+from slack_sdk.socket_mode.async_client import AsyncBaseSocketModeClient
 from slack_sdk.socket_mode.request import SocketModeRequest
 from slack_sdk.socket_mode.response import SocketModeResponse
 from slack_sdk.socket_mode.websockets import SocketModeClient
@@ -13,6 +14,7 @@ from slackify_markdown import slackify_markdown
 from bao.bus.events import OutboundMessage
 from bao.bus.queue import MessageBus
 from bao.channels.base import BaseChannel
+from bao.channels.progress_text import EditingProgress
 from bao.config.schema import SlackConfig
 
 
@@ -27,6 +29,12 @@ class SlackChannel(BaseChannel):
         self._web_client: AsyncWebClient | None = None
         self._socket_client: SocketModeClient | None = None
         self._bot_user_id: str | None = None
+        self._progress_threads: dict[str, str | None] = {}
+        self._progress_handler = EditingProgress(
+            self._create_progress_text,
+            self._update_progress_text,
+            self._send_text,
+        )
 
     async def start(self) -> None:
         """Start the Slack Socket Mode client."""
@@ -65,6 +73,8 @@ class SlackChannel(BaseChannel):
 
     async def stop(self) -> None:
         """Stop the Slack client."""
+        self._clear_progress()
+        self._progress_threads.clear()
         self._running = False
         if self._socket_client:
             try:
@@ -85,13 +95,9 @@ class SlackChannel(BaseChannel):
             # Only reply in thread for channel/group messages; DMs don't use threads
             use_thread = thread_ts and channel_type != "im"
             thread_ts_param = thread_ts if use_thread else None
+            self._progress_threads[msg.chat_id] = thread_ts_param
 
-            if msg.content:
-                await self._web_client.chat_postMessage(
-                    channel=msg.chat_id,
-                    text=self._to_mrkdwn(msg.content),
-                    thread_ts=thread_ts_param,
-                )
+            await self._dispatch_progress_text(msg, flush_progress=True)
 
             for media_path in msg.media or []:
                 try:
@@ -102,12 +108,46 @@ class SlackChannel(BaseChannel):
                     )
                 except Exception as e:
                     logger.error("❌ 上传失败 / upload failed: {}: {}", media_path, e)
+            meta = msg.metadata or {}
+            if bool(meta.get("_progress_clear")) or not bool(meta.get("_progress")):
+                self._progress_threads.pop(msg.chat_id, None)
         except Exception as e:
             logger.error("❌ 发送失败 / send failed: {}", e)
 
+    async def _send_text(self, chat_id: str, text: str) -> None:
+        if not self._web_client or not text:
+            return
+        await self._web_client.chat_postMessage(
+            channel=chat_id,
+            text=self._to_mrkdwn(text),
+            thread_ts=self._progress_threads.get(chat_id),
+        )
+
+    async def _create_progress_text(self, chat_id: str, text: str) -> str | None:
+        if not self._web_client or not text:
+            return None
+        response = await self._web_client.chat_postMessage(
+            channel=chat_id,
+            text=self._to_mrkdwn(text),
+            thread_ts=self._progress_threads.get(chat_id),
+        )
+        return response.get("ts") if isinstance(response, dict) else None
+
+    async def _update_progress_text(
+        self, chat_id: str, handle: str | None, text: str
+    ) -> str | None:
+        if not self._web_client or not handle or not text:
+            return handle
+        await self._web_client.chat_update(
+            channel=chat_id,
+            ts=handle,
+            text=self._to_mrkdwn(text),
+        )
+        return handle
+
     async def _on_socket_request(
         self,
-        client: SocketModeClient,
+        client: AsyncBaseSocketModeClient,
         req: SocketModeRequest,
     ) -> None:
         """Handle incoming Socket Mode requests."""
@@ -168,18 +208,19 @@ class SlackChannel(BaseChannel):
             thread_ts = event.get("ts")
         # Add :eyes: reaction to the triggering message (best-effort)
         try:
-            if self._web_client and event.get("ts"):
+            event_ts = event.get("ts")
+            if self._web_client and isinstance(event_ts, str) and event_ts:
                 await self._web_client.reactions_add(
                     channel=chat_id,
                     name=self.config.react_emoji,
-                    timestamp=event.get("ts"),
+                    timestamp=event_ts,
                 )
         except Exception as e:
             logger.debug("Slack reactions_add failed: {}", e)
 
         try:
             # For non-DM channel messages with a thread: isolate session per thread
-            meta: dict = {
+            meta: dict[str, object] = {
                 "slack": {
                     "event": event,
                     "thread_ts": thread_ts,
@@ -246,7 +287,7 @@ class SlackChannel(BaseChannel):
         """Fix markdown artifacts that slackify_markdown misses."""
         code_blocks: list[str] = []
 
-        def _save_code(m: re.Match) -> str:
+        def _save_code(m: re.Match[str]) -> str:
             code_blocks.append(m.group(0))
             return f"\x00CB{len(code_blocks) - 1}\x00"
 
@@ -260,7 +301,7 @@ class SlackChannel(BaseChannel):
         return text
 
     @staticmethod
-    def _convert_table(match: re.Match) -> str:
+    def _convert_table(match: re.Match[str]) -> str:
         """Convert a Markdown table to a Slack-readable list."""
         lines = [ln.strip() for ln in match.group(0).strip().splitlines() if ln.strip()]
         if len(lines) < 2:

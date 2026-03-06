@@ -16,6 +16,7 @@ from loguru import logger
 from bao.bus.events import OutboundMessage
 from bao.bus.queue import MessageBus
 from bao.channels.base import BaseChannel
+from bao.channels.progress_text import ProgressBuffer
 from bao.config.schema import DingTalkConfig
 
 _dingtalk_available = False
@@ -54,9 +55,11 @@ class DingTalkChannel(BaseChannel):
         # Access Token management for sending messages
         self._access_token: str | None = None
         self._token_expiry: float = 0
+        self._progress_token: str | None = None
 
         # Hold references to background tasks to prevent GC
         self._background_tasks: set[asyncio.Task[Any]] = set()
+        self._progress_handler = ProgressBuffer(self._send_text)
 
     async def start(self) -> None:
         """Start the DingTalk bot with Stream Mode."""
@@ -157,6 +160,7 @@ class DingTalkChannel(BaseChannel):
 
     async def stop(self) -> None:
         """Stop the DingTalk bot."""
+        self._clear_progress()
         self._running = False
         self.mark_not_ready()
         # Close the shared HTTP client
@@ -442,8 +446,8 @@ class DingTalkChannel(BaseChannel):
         if not token:
             return
 
-        if msg.content and msg.content.strip():
-            await self._send_markdown_text(token, msg.chat_id, msg.content.strip())
+        self._progress_token = token
+        await self._dispatch_progress_text(msg, flush_progress=False)
 
         for media_ref in msg.media or []:
             ok = await self._send_media_ref(token, msg.chat_id, media_ref)
@@ -456,6 +460,12 @@ class DingTalkChannel(BaseChannel):
                 msg.chat_id,
                 f"[Attachment send failed: {filename}]",
             )
+
+    async def _send_text(self, chat_id: str, text: str) -> None:
+        token = getattr(self, "_progress_token", None)
+        if not token or not text.strip():
+            return
+        await self._send_markdown_text(token, chat_id, text.strip())
 
     async def _on_message(self, content: str, sender_id: str, sender_name: str) -> None:
         """Handle incoming message (called by baoDingTalkHandler).

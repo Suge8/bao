@@ -8,6 +8,7 @@ from loguru import logger
 
 from bao.bus.events import InboundMessage, OutboundMessage
 from bao.bus.queue import MessageBus
+from bao.channels.progress_text import ProgressHandler
 
 
 class BaseChannel(ABC):
@@ -32,6 +33,7 @@ class BaseChannel(ABC):
         self.bus = bus
         self._running = False
         self._ready = asyncio.Event()
+        self._progress_handler: ProgressHandler | None = None
 
     @abstractmethod
     async def start(self) -> None:
@@ -137,3 +139,28 @@ class BaseChannel(ABC):
 
     async def wait_ready(self) -> None:
         await self._ready.wait()
+
+    @property
+    def supports_progress(self) -> bool:
+        return self._progress_handler is not None
+
+    async def _dispatch_progress_text(self, msg: OutboundMessage, *, flush_progress: bool) -> bool:
+        handler = self._progress_handler
+        if handler is None:
+            return False
+
+        meta = msg.metadata or {}
+        await handler.handle(
+            msg.chat_id,
+            msg.content or "",
+            is_progress=bool(meta.get("_progress")),
+            is_tool_hint=bool(meta.get("_tool_hint")),
+            clear_only=bool(meta.get("_progress_clear")),
+        )
+        if bool(meta.get("_progress")) and not bool(meta.get("_tool_hint")) and flush_progress:
+            await handler.flush(msg.chat_id, force=False)
+        return True
+
+    def _clear_progress(self) -> None:
+        if self._progress_handler is not None:
+            self._progress_handler.clear_all()

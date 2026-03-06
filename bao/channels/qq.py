@@ -9,6 +9,7 @@ from loguru import logger
 from bao.bus.events import OutboundMessage
 from bao.bus.queue import MessageBus
 from bao.channels.base import BaseChannel
+from bao.channels.progress_text import ProgressBuffer
 from bao.config.schema import QQConfig
 
 _qq_available = False
@@ -60,6 +61,8 @@ class QQChannel(BaseChannel):
         self._client: Any = None
         self._processed_ids: deque[str] = deque(maxlen=1000)
         self._bot_task: asyncio.Task[None] | None = None
+        self._progress_msg_id: dict[str, str | None] = {}
+        self._progress_handler = ProgressBuffer(self._send_text)
 
     async def start(self) -> None:
         """Start the QQ bot."""
@@ -100,6 +103,8 @@ class QQChannel(BaseChannel):
 
     async def stop(self) -> None:
         """Stop the QQ bot."""
+        self._clear_progress()
+        self._progress_msg_id.clear()
         self._running = False
         self.mark_not_ready()
         if self._bot_task:
@@ -115,12 +120,22 @@ class QQChannel(BaseChannel):
         if not self._client:
             logger.warning("⚠️ 未初始化 / client not initialized: QQ")
             return
+        meta = msg.metadata if isinstance(msg.metadata, dict) else {}
+        raw_msg_id = meta.get("message_id")
+        self._progress_msg_id[msg.chat_id] = raw_msg_id if isinstance(raw_msg_id, str) else None
+        await self._dispatch_progress_text(msg, flush_progress=False)
+        if bool(meta.get("_progress_clear")) or not bool(meta.get("_progress")):
+            self._progress_msg_id.pop(msg.chat_id, None)
+
+    async def _send_text(self, chat_id: str, text: str) -> None:
+        if not self._client or not text:
+            return
         try:
-            msg_id = msg.metadata.get("message_id") if isinstance(msg.metadata, dict) else None
+            msg_id = self._progress_msg_id.get(chat_id)
             await self._client.api.post_c2c_message(
-                openid=msg.chat_id,
+                openid=chat_id,
                 msg_type=0,
-                content=msg.content,
+                content=text,
                 msg_id=msg_id,
             )
         except Exception as e:

@@ -1,9 +1,11 @@
 import asyncio
+from typing import cast
 
 from bao.agent.loop import AgentLoop
 from bao.bus.events import OutboundMessage
 from bao.bus.queue import MessageBus
 from bao.channels.imessage import IMessageChannel
+from bao.channels.progress_text import ProgressBuffer
 from bao.config.schema import IMessageConfig
 from bao.providers.base import ToolCallRequest
 
@@ -235,7 +237,9 @@ def test_imessage_progress_clear_marker_drops_buffer_without_sending(monkeypatch
     asyncio.run(_run())
 
     assert scripts == []
-    assert channel._progress._buf == {}
-    assert channel._progress._open == {}
-    assert channel._progress._last_text == {}
-    assert channel._progress._last_time == {}
+    progress = cast(ProgressBuffer, channel._progress_handler)
+    assert progress is not None
+    assert progress._buf == {}
+    assert progress._open == {}
+    assert progress._last_text == {}
+    assert progress._last_time == {}

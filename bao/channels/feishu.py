@@ -14,6 +14,7 @@ from loguru import logger
 from bao.bus.events import OutboundMessage
 from bao.bus.queue import MessageBus
 from bao.channels.base import BaseChannel
+from bao.channels.progress_text import EditingProgress
 from bao.config.schema import FeishuConfig
 
 lark: Any = None
@@ -28,6 +29,8 @@ CreateMessageRequestBody: Any = None
 Emoji: Any = None
 GetFileRequest: Any = None
 GetMessageResourceRequest: Any = None
+PatchMessageRequest: Any = None
+PatchMessageRequestBody: Any = None
 
 _feishu_available = False
 try:
@@ -44,6 +47,8 @@ try:
         Emoji,
         GetFileRequest,
         GetMessageResourceRequest,
+        PatchMessageRequest,
+        PatchMessageRequestBody,
     )
 
     _feishu_available = True
@@ -280,6 +285,11 @@ class FeishuChannel(BaseChannel):
         self._ws_thread: threading.Thread | None = None
         self._processed_message_ids: OrderedDict[str, None] = OrderedDict()  # Ordered dedup cache
         self._loop: asyncio.AbstractEventLoop | None = None
+        self._progress_handler = EditingProgress(
+            self._create_progress_text,
+            self._update_progress_text,
+            self._send_text,
+        )
 
     async def start(self) -> None:
         """Start the Feishu bot with WebSocket long connection."""
@@ -355,6 +365,7 @@ class FeishuChannel(BaseChannel):
         """Stop the Feishu bot."""
         self._running = False
         self.mark_not_ready()
+        self._clear_progress()
         ws_client = self._ws_client
         if ws_client and hasattr(ws_client, "stop"):
             try:
@@ -661,8 +672,7 @@ class FeishuChannel(BaseChannel):
 
     def _send_message_sync(
         self, receive_id_type: str, receive_id: str, msg_type: str, content: str
-    ) -> bool:
-        """Send a single message (text/image/file/interactive) synchronously."""
+    ) -> str | None:
         try:
             request = (
                 CreateMessageRequest.builder()
@@ -685,11 +695,37 @@ class FeishuChannel(BaseChannel):
                     response.msg,
                     response.get_log_id(),
                 )
-                return False
+                return None
             logger.debug("Feishu {} message sent to {}", msg_type, receive_id)
-            return True
+            data = getattr(response, "data", None)
+            message_id = getattr(data, "message_id", None)
+            return str(message_id) if message_id else None
         except Exception as e:
             logger.error("❌ 飞书消息发送异常 / send error: {}: {}", msg_type, e)
+            return None
+
+    def _patch_message_sync(self, message_id: str, content: str) -> bool:
+        if not self._client or not PatchMessageRequest or not PatchMessageRequestBody:
+            return False
+        try:
+            request = (
+                PatchMessageRequest.builder()
+                .message_id(message_id)
+                .request_body(PatchMessageRequestBody.builder().content(content).build())
+                .build()
+            )
+            response = self._client.im.v1.message.patch(request)
+            if not response.success():
+                logger.error(
+                    "❌ 飞书消息更新失败 / patch failed: code={}, msg={}, log_id={}",
+                    response.code,
+                    response.msg,
+                    response.get_log_id(),
+                )
+                return False
+            return True
+        except Exception as e:
+            logger.error("❌ 飞书消息更新异常 / patch error: {}", e)
             return False
 
     async def send(self, msg: OutboundMessage) -> None:
@@ -731,22 +767,66 @@ class FeishuChannel(BaseChannel):
                             json.dumps({"file_key": key}, ensure_ascii=False),
                         )
 
-            if msg.content and msg.content.strip():
-                card = {
-                    "config": {"wide_screen_mode": True},
-                    "elements": self._build_card_elements(msg.content),
-                }
-                await loop.run_in_executor(
-                    None,
-                    self._send_message_sync,
-                    receive_id_type,
-                    msg.chat_id,
-                    "interactive",
-                    json.dumps(card, ensure_ascii=False),
-                )
+            if msg.content or (msg.metadata or {}).get("_progress_clear"):
+                await self._dispatch_progress_text(msg, flush_progress=True)
 
         except Exception as e:
             logger.error("❌ 飞书发送异常 / send error: {}", e)
+
+    async def _send_text(self, chat_id: str, text: str) -> None:
+        if not self._client or not text.strip():
+            return
+        receive_id_type = "chat_id" if chat_id.startswith("oc_") else "open_id"
+        card = {
+            "config": {"wide_screen_mode": True},
+            "elements": self._build_card_elements(text),
+        }
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(
+            None,
+            self._send_message_sync,
+            receive_id_type,
+            chat_id,
+            "interactive",
+            json.dumps(card, ensure_ascii=False),
+        )
+
+    async def _create_progress_text(self, chat_id: str, text: str) -> str | None:
+        if not self._client or not text.strip():
+            return None
+        receive_id_type = "chat_id" if chat_id.startswith("oc_") else "open_id"
+        card = {
+            "config": {"wide_screen_mode": True},
+            "elements": self._build_card_elements(text),
+        }
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            None,
+            self._send_message_sync,
+            receive_id_type,
+            chat_id,
+            "interactive",
+            json.dumps(card, ensure_ascii=False),
+        )
+
+    async def _update_progress_text(
+        self, chat_id: str, handle: str | None, text: str
+    ) -> str | None:
+        del chat_id
+        if not handle or not text.strip():
+            return handle
+        card = {
+            "config": {"wide_screen_mode": True},
+            "elements": self._build_card_elements(text),
+        }
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(
+            None,
+            self._patch_message_sync,
+            handle,
+            json.dumps(card, ensure_ascii=False),
+        )
+        return handle
 
     def _on_message_sync(self, data: Any) -> None:
         """

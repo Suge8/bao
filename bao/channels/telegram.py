@@ -3,18 +3,28 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
-from typing import Any
+from collections.abc import Awaitable, Callable
+from contextlib import contextmanager
+from typing import Any, TypeVar
 
 from loguru import logger
 from telegram import BotCommand, ReplyParameters, Update
+from telegram.error import BadRequest, NetworkError, TelegramError
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 from telegram.request import HTTPXRequest
 
 from bao.bus.events import OutboundMessage
 from bao.bus.queue import MessageBus
 from bao.channels.base import BaseChannel
+from bao.channels.progress_text import EditingProgress
 from bao.config.schema import TelegramConfig
+
+_T = TypeVar("_T")
+_UPDATER_CLEANUP_LOG = (
+    "Error while calling `get_updates` one more time to mark all fetched updates."
+)
 
 
 def _markdown_to_telegram_html(text: str) -> str:
@@ -82,6 +92,15 @@ def _markdown_to_telegram_html(text: str) -> str:
     return text
 
 
+def _is_telegram_parse_error(error: BadRequest) -> bool:
+    message = str(error).lower()
+    return "parse" in message or "entity" in message or "tag" in message
+
+
+def _is_message_not_modified(error: BadRequest) -> bool:
+    return "message is not modified" in str(error).lower()
+
+
 def _split_message(content: str, max_len: int = 4000) -> list[str]:
     """Split content into chunks within max_len, preferring line breaks."""
     if len(content) <= max_len:
@@ -100,6 +119,36 @@ def _split_message(content: str, max_len: int = 4000) -> list[str]:
         chunks.append(content[:pos])
         content = content[pos:].lstrip()
     return chunks
+
+
+def _on_polling_error(exc: TelegramError) -> None:
+    if isinstance(exc, NetworkError):
+        logger.warning("⚠️ Telegram polling 网络波动 / polling network issue: {}", exc)
+        return
+    logger.error("❌ Telegram polling 异常 / polling error: {}", exc)
+
+
+async def _run_start_step(label: str, operation: Callable[[], Awaitable[_T]]) -> _T:
+    try:
+        return await operation()
+    except Exception as exc:
+        raise RuntimeError(f"{label}: {exc.__class__.__name__}: {exc}") from exc
+
+
+@contextmanager
+def _suppress_updater_cleanup_log() -> Any:
+    logger = logging.getLogger("telegram.ext.Updater")
+
+    class _CleanupFilter(logging.Filter):
+        def filter(self, record: logging.LogRecord) -> bool:
+            return _UPDATER_CLEANUP_LOG not in record.getMessage()
+
+    cleanup_filter = _CleanupFilter()
+    logger.addFilter(cleanup_filter)
+    try:
+        yield
+    finally:
+        logger.removeFilter(cleanup_filter)
 
 
 class TelegramChannel(BaseChannel):
@@ -135,6 +184,13 @@ class TelegramChannel(BaseChannel):
         self._typing_tasks: dict[str, asyncio.Task[None]] = {}  # chat_id -> typing loop task
         self._media_group_buffers: dict[str, list[dict[str, object]]] = {}
         self._media_group_tasks: dict[str, asyncio.Task[None]] = {}
+        self._progress_reply_params: dict[str, ReplyParameters | None] = {}
+        self._progress_handler = EditingProgress(
+            self._create_progress_text,
+            self._update_progress_text,
+            self._send_text,
+            split_fn=_split_message,
+        )
 
     async def start(self) -> None:
         """Start the Telegram bot with long polling."""
@@ -147,11 +203,13 @@ class TelegramChannel(BaseChannel):
 
         self._running = True
 
-        # Build the application with larger connection pool to avoid pool-timeout on long runs
-        req = HTTPXRequest(
+        api_req = HTTPXRequest(
             connection_pool_size=16, pool_timeout=5.0, connect_timeout=30.0, read_timeout=30.0
         )
-        builder = Application.builder().token(token).request(req).get_updates_request(req)
+        poll_req = HTTPXRequest(
+            connection_pool_size=1, pool_timeout=5.0, connect_timeout=30.0, read_timeout=30.0
+        )
+        builder = Application.builder().token(token).request(api_req).get_updates_request(poll_req)
         if self.config.proxy:
             builder = builder.proxy(self.config.proxy).get_updates_proxy(self.config.proxy)
         self._app = builder.build()
@@ -184,11 +242,12 @@ class TelegramChannel(BaseChannel):
         logger.info("📡 启动通道 / starting: Telegram polling")
 
         # Initialize and start polling
-        await app.initialize()
-        await app.start()
+        await _run_start_step("bot_initialize", app.bot.initialize)
+        await _run_start_step("application_initialize", app.initialize)
+        await _run_start_step("start", app.start)
 
         # Get bot info and register command menu
-        bot_info = await app.bot.get_me()
+        bot_info = await _run_start_step("get_me", app.bot.get_me)
         logger.info("✅ 连接成功 / connected: @{}", bot_info.username)
         self.mark_ready()
 
@@ -201,9 +260,13 @@ class TelegramChannel(BaseChannel):
         # Start polling (this runs until stopped)
         updater = app.updater
         assert updater is not None
-        await updater.start_polling(
-            allowed_updates=["message"],
-            drop_pending_updates=True,  # Ignore old messages on startup
+        await _run_start_step(
+            "start_polling",
+            lambda: updater.start_polling(
+                allowed_updates=["message"],
+                drop_pending_updates=True,
+                error_callback=_on_polling_error,
+            ),
         )
 
         # Keep running until stopped
@@ -214,6 +277,8 @@ class TelegramChannel(BaseChannel):
         """Stop the Telegram bot."""
         self._running = False
         self.mark_not_ready()
+        self._clear_progress()
+        self._progress_reply_params.clear()
 
         # Cancel all typing indicators
         for chat_id in list(self._typing_tasks):
@@ -232,8 +297,9 @@ class TelegramChannel(BaseChannel):
             app = self._app
             logger.info("📡 停止通道 / stopping: Telegram bot")
             updater = getattr(app, "updater", None)
-            if updater is not None:
-                await updater.stop()
+            if updater is not None and getattr(updater, "running", False):
+                with _suppress_updater_cleanup_log():
+                    await updater.stop()
             await app.stop()
             await app.shutdown()
             self._app = None
@@ -307,21 +373,99 @@ class TelegramChannel(BaseChannel):
                 )
 
         # Send text content
-        if msg.content and msg.content != "[empty message]":
-            for chunk in _split_message(msg.content):
-                try:
-                    html = _markdown_to_telegram_html(chunk)
-                    await self._app.bot.send_message(
-                        chat_id=chat_id, text=html, parse_mode="HTML", reply_parameters=reply_params
-                    )
-                except Exception as e:
-                    logger.warning("⚠️ 解析失败 / parse failed: {}", e)
-                    try:
-                        await self._app.bot.send_message(
-                            chat_id=chat_id, text=chunk, reply_parameters=reply_params
-                        )
-                    except Exception as e2:
-                        logger.error("❌ 发送失败 / send failed: {}", e2)
+        self._progress_reply_params[msg.chat_id] = reply_params
+        await self._dispatch_progress_text(msg, flush_progress=True)
+        meta = msg.metadata or {}
+        if bool(meta.get("_progress_clear")) or not meta.get("_progress"):
+            self._progress_reply_params.pop(msg.chat_id, None)
+
+    async def _send_text(self, chat_id: str, text: str) -> None:
+        if not self._app or not text:
+            return
+
+        chat_id_int = self._parse_chat_id(chat_id)
+        if chat_id_int is None:
+            return
+
+        reply_params = self._progress_reply_params.get(chat_id)
+        for chunk in _split_message(text):
+            await self._send_text_message(chat_id_int, chunk, reply_params)
+
+    async def _create_progress_text(self, chat_id: str, text: str) -> int | None:
+        if not self._app or not text:
+            return None
+
+        chat_id_int = self._parse_chat_id(chat_id)
+        if chat_id_int is None:
+            return None
+
+        reply_params = self._progress_reply_params.get(chat_id)
+        message = await self._send_text_message(chat_id_int, text, reply_params)
+        return int(message.message_id)
+
+    async def _update_progress_text(
+        self, chat_id: str, handle: int | None, text: str
+    ) -> int | None:
+        if not self._app or handle is None or not text:
+            return handle
+
+        chat_id_int = self._parse_chat_id(chat_id)
+        if chat_id_int is None:
+            return handle
+
+        html = _markdown_to_telegram_html(text)
+        try:
+            await self._app.bot.edit_message_text(
+                chat_id=chat_id_int,
+                message_id=handle,
+                text=html,
+                parse_mode="HTML",
+            )
+        except BadRequest as e:
+            if _is_message_not_modified(e):
+                return handle
+            if not _is_telegram_parse_error(e):
+                raise
+            logger.warning("⚠️ HTML 更新失败 / html edit failed: {}", e)
+            await self._app.bot.edit_message_text(
+                chat_id=chat_id_int,
+                message_id=handle,
+                text=text,
+            )
+        return handle
+
+    @staticmethod
+    def _parse_chat_id(chat_id: str) -> int | None:
+        try:
+            return int(chat_id)
+        except ValueError:
+            logger.error("❌ 参数无效 / invalid chat_id: {}", chat_id)
+            return None
+
+    async def _send_text_message(
+        self,
+        chat_id: int,
+        text: str,
+        reply_params: ReplyParameters | None,
+    ) -> Any:
+        assert self._app is not None
+        html = _markdown_to_telegram_html(text)
+        try:
+            return await self._app.bot.send_message(
+                chat_id=chat_id,
+                text=html,
+                parse_mode="HTML",
+                reply_parameters=reply_params,
+            )
+        except BadRequest as e:
+            if not _is_telegram_parse_error(e):
+                raise
+            logger.warning("⚠️ HTML 发送失败 / html send failed: {}", e)
+            return await self._app.bot.send_message(
+                chat_id=chat_id,
+                text=text,
+                reply_parameters=reply_params,
+            )
 
     async def _on_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /start command."""

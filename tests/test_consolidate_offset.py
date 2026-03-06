@@ -138,6 +138,16 @@ class TestSessionImmutableHistory:
         assert display[0]["content"] == "a0"
         assert display[1]["content"] == "a1"
 
+    def test_get_display_history_preserves_format_and_entrance_style(self) -> None:
+        session = Session(key="test:display-meta")
+        session.add_message("assistant", "**a0**", format="markdown")
+        session.add_message("system", "welcome", entrance_style="greeting", format="plain")
+
+        display = session.get_display_history(max_messages=10)
+
+        assert display[0]["format"] == "markdown"
+        assert display[1]["entrance_style"] == "greeting"
+
     def test_get_history_stable_for_same_session(self) -> None:
         """Test that get_history returns same content for same max_messages."""
         session = create_session_with_messages("test:stable", 20)

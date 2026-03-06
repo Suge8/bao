@@ -33,7 +33,7 @@ class WhatsAppChannel(BaseChannel):
         self._ws = None
         self._connected = False
         self._processed_message_ids: OrderedDict[str, None] = OrderedDict()
-        self._progress = ProgressBuffer(self._send_text)
+        self._progress_handler = ProgressBuffer(self._send_text)
 
     async def start(self) -> None:
         """Start the WhatsApp channel by connecting to the bridge."""
@@ -84,7 +84,7 @@ class WhatsAppChannel(BaseChannel):
 
     async def stop(self) -> None:
         """Stop the WhatsApp channel."""
-        self._progress.clear_all()
+        self._clear_progress()
         self._running = False
         self._connected = False
         self.mark_not_ready()
@@ -94,14 +94,7 @@ class WhatsAppChannel(BaseChannel):
 
     async def send(self, msg: OutboundMessage) -> None:
         """Send a message through WhatsApp."""
-        meta = msg.metadata or {}
-        await self._progress.handle(
-            msg.chat_id,
-            msg.content or "",
-            is_progress=bool(meta.get("_progress")),
-            is_tool_hint=bool(meta.get("_tool_hint")),
-            clear_only=bool(meta.get("_progress_clear")),
-        )
+        await self._dispatch_progress_text(msg, flush_progress=False)
 
     async def _send_text(self, chat_id: str, text: str) -> None:
         """Send raw text via WebSocket bridge."""
