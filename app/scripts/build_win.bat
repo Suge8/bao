@@ -50,6 +50,7 @@ if "%JOBS%"=="" set "JOBS=4"
 
 uv run python -m nuitka ^
     --standalone ^
+    --windows-console-mode=disable ^
     --jobs=%JOBS% ^
     --windows-icon-from-ico="%PROJECT_ROOT%\assets\logo.ico" ^
     --windows-company-name="Bao" ^
@@ -61,7 +62,8 @@ uv run python -m nuitka ^
     --include-data-dir="%PROJECT_ROOT%\app\qml=qml" ^
     --include-data-dir="%PROJECT_ROOT%\app\resources=resources" ^
     --include-data-dir="%PROJECT_ROOT%\bao\skills=data\skills" ^
-    --include-data-dir="%PROJECT_ROOT%\bao\templates\workspace=bao\templates\workspace" ^
+    --include-data-dir="%PROJECT_ROOT%\bao\templates\workspace\en=bao\templates\workspace\en" ^
+    --include-data-dir="%PROJECT_ROOT%\bao\templates\workspace\zh=bao\templates\workspace\zh" ^
     --nofollow-import-to=tkinter ^
     --nofollow-import-to=unittest ^
     --nofollow-import-to=doctest ^
