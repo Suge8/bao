@@ -6,6 +6,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/), and this pro
 
 ## [Unreleased]
 
+## [0.3.13] - 2026-03-07
+
+### Fixed
+
+- **Desktop Release Windows 预检误把 Chocolatey shim 当成 Inno Setup 安装根** — `resolve_inno_setup.py` 现在会把 `Chocolatey\bin\iscc.exe` 展开为真实包内 `ISCC.exe` 候选路径后再校验 `Default.isl` 与语言文件，避免 runner 明明已装 Inno Setup 仍在 preflight 阶段报缺文件。
+- **release 校验任务被 uv cache 服务抖动误伤** — `desktop-release.yml` 的 `validate-version` job 不再依赖 `setup-uv` 缓存，避免 GitHub cache `400` 让轻量版本校验无谓失败。
+
 ## [0.3.12] - 2026-03-07
 
 ### Changed
