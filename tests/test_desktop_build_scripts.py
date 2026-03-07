@@ -72,3 +72,13 @@ def test_desktop_release_workflow_checks_inno_setup_before_windows_build() -> No
     assert preflight_index < build_index
     assert "Validate Inno Setup toolchain early" in text
     assert "BAO_ISCC_EXE=$resolved" in text
+
+
+def test_desktop_release_validation_job_does_not_depend_on_uv_cache() -> None:
+    text = _read(".github/workflows/desktop-release.yml")
+
+    validate_section = text.split("  validate-version:", maxsplit=1)[1].split(
+        "  build-mac:", maxsplit=1
+    )[0]
+    assert "uses: astral-sh/setup-uv@v4" in validate_section
+    assert "enable-cache: true" not in validate_section

@@ -76,8 +76,6 @@ jobs:
 
       - name: Install uv
         uses: astral-sh/setup-uv@v4
-        with:
-          enable-cache: true
 
       - name: Install validation dependencies
         run: uv sync --extra dev --frozen
