@@ -140,6 +140,10 @@ class SpawnTool(Tool):
                     "type": "string",
                     "description": "task_id of a completed/failed task whose result provides context",
                 },
+                "child_session_key": {
+                    "type": "string",
+                    "description": "Optional child session key to continue an existing subagent thread",
+                },
             },
             "required": ["task"],
         }
@@ -149,18 +153,22 @@ class SpawnTool(Tool):
         task = kwargs.get("task")
         label = kwargs.get("label")
         context_from = kwargs.get("context_from")
+        child_session_key = kwargs.get("child_session_key")
         if not isinstance(task, str) or not task:
             return "Spawn failed: task text is required"
         if label is not None and not isinstance(label, str):
             return "Spawn failed: label must be a string"
-        result = await self._manager.spawn(
-            task=task,
-            label=label,
-            origin_channel=self._origin_channel.get(),
-            origin_chat_id=self._origin_chat_id.get(),
-            session_key=self._session_key.get(),
-            context_from=context_from if isinstance(context_from, str) else None,
-        )
+        spawn_kwargs: dict[str, Any] = {
+            "task": task,
+            "label": label,
+            "origin_channel": self._origin_channel.get(),
+            "origin_chat_id": self._origin_chat_id.get(),
+            "session_key": self._session_key.get(),
+            "context_from": context_from if isinstance(context_from, str) else None,
+        }
+        if isinstance(child_session_key, str):
+            spawn_kwargs["child_session_key"] = child_session_key
+        result = await self._manager.spawn(**spawn_kwargs)
         try:
             await self._notify_spawn_started(result)
         except asyncio.CancelledError:

@@ -4,6 +4,7 @@ import asyncio
 import inspect
 import json
 import re
+import shlex
 import tempfile
 import uuid
 from contextlib import AsyncExitStack
@@ -157,6 +158,89 @@ _SESSION_LANG_KEY = "_session_lang"
 _CJK_CHAR_RE = re.compile(r"[\u3400-\u9FFF]")
 _LATIN_CHAR_RE = re.compile(r"[A-Za-z]")
 _ROUTE_WORD_RE = re.compile(r"[a-z0-9_./:-]+", re.IGNORECASE)
+_TOOL_HINT_LABELS = {
+    "read_file": ("读取文件", "Read File"),
+    "write_file": ("写入文件", "Write File"),
+    "edit_file": ("编辑文件", "Edit File"),
+    "list_dir": ("查看文件夹", "List Folder"),
+    "exec": ("执行命令", "Run Command"),
+    "coding_agent": ("代码代理", "Coding Agent"),
+    "coding_agent_details": ("代理详情", "Agent Run Details"),
+    "opencode": ("OpenCode 代理", "OpenCode Agent"),
+    "opencode_details": ("OpenCode 详情", "OpenCode Details"),
+    "codex": ("Codex 代理", "Codex Agent"),
+    "codex_details": ("Codex 详情", "Codex Details"),
+    "claudecode": ("Claude Code 代理", "Claude Code Agent"),
+    "claudecode_details": ("Claude Code 详情", "Claude Code Details"),
+    "generate_image": ("生成图片", "Create Image"),
+    "web_search": ("搜索网页", "Search Web"),
+    "web_fetch": ("打开网页", "Fetch Web Page"),
+    "agent_browser": ("操作浏览器", "Control Browser"),
+    "message": ("发送消息", "Send Message"),
+    "runtime_diagnostics": ("查看诊断", "Inspect Runtime"),
+    "create_plan": ("创建计划", "Create Plan"),
+    "update_plan_step": ("更新计划", "Update Plan"),
+    "clear_plan": ("清空计划", "Clear Plan"),
+    "spawn": ("委派任务", "Delegate Task"),
+    "check_tasks": ("查看任务进度", "Check Task Progress"),
+    "cancel_task": ("取消任务", "Cancel Task"),
+    "check_tasks_json": ("任务进度 JSON", "Task Progress JSON"),
+    "remember": ("保存记忆", "Save Memory"),
+    "forget": ("删除记忆", "Delete Memory"),
+    "update_memory": ("更新记忆", "Update Memory"),
+    "cron": ("安排任务", "Schedule Task"),
+    "screenshot": ("截图", "Take Screenshot"),
+    "click": ("点击屏幕", "Click Screen"),
+    "type_text": ("输入文字", "Type Text"),
+    "key_press": ("按下按键", "Press Key"),
+    "scroll": ("滚动页面", "Scroll Screen"),
+    "drag": ("拖动光标", "Drag Cursor"),
+    "get_screen_info": ("查看屏幕信息", "Screen Info"),
+}
+_TOOL_HINT_ICONS = {
+    "read_file": "📄",
+    "write_file": "📝",
+    "edit_file": "📝",
+    "list_dir": "📁",
+    "exec": "💻",
+    "coding_agent": "🤖",
+    "coding_agent_details": "🤖",
+    "opencode": "🤖",
+    "opencode_details": "🤖",
+    "codex": "🤖",
+    "codex_details": "🤖",
+    "claudecode": "🤖",
+    "claudecode_details": "🤖",
+    "generate_image": "🖼️",
+    "web_search": "🔎",
+    "web_fetch": "🌐",
+    "agent_browser": "🌐",
+    "message": "✉️",
+    "runtime_diagnostics": "🩺",
+    "create_plan": "🗂️",
+    "update_plan_step": "🗂️",
+    "clear_plan": "🗂️",
+    "spawn": "🤖",
+    "check_tasks": "📋",
+    "cancel_task": "🛑",
+    "check_tasks_json": "📋",
+    "remember": "🧠",
+    "forget": "🧠",
+    "update_memory": "🧠",
+    "cron": "⏰",
+    "screenshot": "📸",
+    "click": "🖱️",
+    "type_text": "⌨️",
+    "key_press": "⌨️",
+    "scroll": "🖱️",
+    "drag": "🖱️",
+    "get_screen_info": "🖥️",
+}
+_TOOL_HINT_CRON_ACTIONS = {
+    "add": ("新增", "add"),
+    "list": ("查看", "list"),
+    "remove": ("删除", "remove"),
+}
 
 _GREETING_WORDS = frozenset(
     {
@@ -331,6 +415,7 @@ class AgentLoop:
             memory_store=self.context.memory,
             image_generation_config=self._image_generation_config,
             desktop_config=self._desktop_config,
+            sessions=self.sessions,
         )
 
         self._running = False
@@ -1201,7 +1286,7 @@ class AgentLoop:
 
         if text.startswith(("http://", "https://")):
             parts = urlsplit(text)
-            host = f"{parts.scheme}://{parts.netloc}"
+            host = parts.netloc.removeprefix("www.")
             segments = [seg for seg in parts.path.split("/") if seg]
             if not segments:
                 return host
@@ -1227,20 +1312,164 @@ class AgentLoop:
         return f"{cut}..."
 
     @staticmethod
-    def _tool_hint(tool_calls: list[Any]) -> str:
-        def _fmt(tc: Any) -> str:
+    def _tool_hint_normalized_name(raw_name: str) -> str:
+        text = raw_name.strip()
+        if not text:
+            return ""
+        if "__" in text:
+            text = text.rsplit("__", 1)[-1]
+        return text
+
+    @staticmethod
+    def _tool_hint_label(raw_name: str, hint_lang: str) -> str:
+        name = AgentLoop._tool_hint_normalized_name(raw_name)
+        if not name:
+            return "工具" if hint_lang == "zh" else "Tool"
+        label = _TOOL_HINT_LABELS.get(name)
+        if label:
+            return label[0] if hint_lang == "zh" else label[1]
+        parts = [part for part in re.split(r"[_./-]+", name) if part]
+        if not parts:
+            return name
+        special = {"json": "JSON", "mcp": "MCP", "api": "API", "ui": "UI", "id": "ID"}
+        return " ".join(special.get(part.lower(), part.capitalize()) for part in parts)
+
+    @staticmethod
+    def _tool_hint_icon(raw_name: str) -> str:
+        name = AgentLoop._tool_hint_normalized_name(raw_name)
+        icon = _TOOL_HINT_ICONS.get(name)
+        if icon:
+            return icon
+        if any(token in name for token in ("search", "find", "lookup")):
+            return "🔎"
+        if any(token in name for token in ("fetch", "browser", "http", "url", "web")):
+            return "🌐"
+        if any(token in name for token in ("read", "file", "open")):
+            return "📄"
+        if any(token in name for token in ("write", "edit", "patch", "update")):
+            return "📝"
+        if any(token in name for token in ("list", "dir", "folder")):
+            return "📁"
+        if any(token in name for token in ("command", "shell", "exec", "bash")):
+            return "💻"
+        if any(token in name for token in ("plan", "task", "status")):
+            return "📋"
+        if any(token in name for token in ("memory", "remember", "forget")):
+            return "🧠"
+        if any(token in name for token in ("screen", "click", "drag", "scroll", "key", "type")):
+            return "🖥️"
+        return "🛠️"
+
+    @staticmethod
+    def _tool_hint_first_string(args: dict[str, Any], *keys: str) -> str:
+        for key in keys:
+            value = args.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return ""
+
+    @staticmethod
+    def _tool_hint_short_command(value: str) -> str:
+        text = value.strip()
+        if not text:
+            return ""
+        try:
+            tokens = shlex.split(text)
+        except ValueError:
+            tokens = text.split()
+        while tokens and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", tokens[0]):
+            tokens.pop(0)
+        if not tokens:
+            return AgentLoop._short_hint_arg(text, max_len=28)
+        clipped: list[str] = []
+        for token in tokens:
+            if token in {"&&", "||", ";", "|"}:
+                break
+            clipped.append(token)
+            if len(clipped) >= 3:
+                break
+        return AgentLoop._short_hint_arg(" ".join(clipped), max_len=28)
+
+    @staticmethod
+    def _tool_hint_generic_detail(args: dict[str, Any]) -> str:
+        for key, max_len in (
+            ("path", 48),
+            ("url", 48),
+            ("query", 32),
+            ("action", 24),
+            ("repo", 28),
+            ("job_id", 24),
+            ("source", 24),
+            ("session_id", 24),
+            ("session", 24),
+            ("session_name", 24),
+            ("agent", 18),
+            ("category", 18),
+        ):
+            safe_value = AgentLoop._tool_hint_first_string(args, key)
+            if safe_value:
+                return AgentLoop._short_hint_arg(safe_value, max_len=max_len)
+        return ""
+
+    @staticmethod
+    def _tool_hint_detail(name: str, args: dict[str, Any], hint_lang: str) -> str:
+        if not args:
+            return ""
+        if name == "spawn":
+            label = AgentLoop._tool_hint_first_string(args, "label")
+            return AgentLoop._short_hint_arg(label, max_len=32) if label else ""
+        if name == "message":
+            channel = AgentLoop._tool_hint_first_string(args, "channel")
+            return AgentLoop._short_hint_arg(channel, max_len=18) if channel else ""
+        if name in {"coding_agent", "coding_agent_details"}:
+            agent = AgentLoop._tool_hint_first_string(args, "agent")
+            return AgentLoop._short_hint_arg(agent, max_len=18) if agent else ""
+        if name == "exec":
+            command = AgentLoop._tool_hint_first_string(args, "command")
+            return AgentLoop._tool_hint_short_command(command)
+        if name == "cron":
+            action = AgentLoop._tool_hint_first_string(args, "action")
+            if not action:
+                return ""
+            mapped = _TOOL_HINT_CRON_ACTIONS.get(action.lower())
+            if mapped:
+                return mapped[0] if hint_lang == "zh" else mapped[1]
+            return AgentLoop._short_hint_arg(action, max_len=18)
+        if name in {"remember", "update_memory"}:
+            category = AgentLoop._tool_hint_first_string(args, "category")
+            return AgentLoop._short_hint_arg(category, max_len=18) if category else ""
+        if name == "forget":
+            query = AgentLoop._tool_hint_first_string(args, "query")
+            return AgentLoop._short_hint_arg(query, max_len=28) if query else ""
+        if name == "agent_browser":
+            action = AgentLoop._tool_hint_first_string(args, "action")
+            return AgentLoop._short_hint_arg(action, max_len=20) if action else ""
+        if name == "update_plan_step":
+            step_index = args.get("step_index")
+            if isinstance(step_index, int) and step_index > 0:
+                return f"第{step_index}步" if hint_lang == "zh" else f"step {step_index}"
+        if name in {"cancel_task", "check_tasks", "check_tasks_json"}:
+            task_id = AgentLoop._tool_hint_first_string(args, "task_id")
+            return AgentLoop._short_hint_arg(task_id, max_len=18) if task_id else ""
+        return AgentLoop._tool_hint_generic_detail(args)
+
+    @staticmethod
+    def _tool_hint(tool_calls: list[Any], lang: str | None = None) -> str:
+        hint_lang = plan_state.normalize_language(lang)
+        parts: list[str] = []
+        for tc in tool_calls:
             args = getattr(tc, "arguments", None)
             if isinstance(args, list):
                 args = args[0] if args else None
             if not isinstance(args, dict):
                 args = {}
-            val = next(iter(args.values()), None) if args else None
-            if not isinstance(val, str):
-                return tc.name
-            short = AgentLoop._short_hint_arg(val)
-            return f'{tc.name}("{short}")' if short else tc.name
-
-        return ", ".join(_fmt(tc) for tc in tool_calls)
+            raw_name = str(getattr(tc, "name", "") or "")
+            name = AgentLoop._tool_hint_normalized_name(raw_name)
+            label = AgentLoop._tool_hint_label(raw_name, hint_lang)
+            icon = AgentLoop._tool_hint_icon(raw_name)
+            short = AgentLoop._tool_hint_detail(name, args, hint_lang)
+            parts.append(f"{icon} {label}: {short}" if short else f"{icon} {label}")
+        return " | ".join(parts)
 
     _TOOL_INTERRUPT_POLL = 0.2
     _TOOL_CANCEL_TIMEOUT = 5.0  # max seconds to wait for tool cleanup after cancel
@@ -1626,13 +1855,19 @@ class AgentLoop:
         completed_tool_msgs: list[dict[str, Any]],
         tool_budget: dict[str, int],
         on_event: Callable[[StreamEvent], Awaitable[None]] | None = None,
+        on_visible_assistant_turn: Callable[[str], Awaitable[None]] | None = None,
+        tool_hint_lang: str | None = None,
     ) -> list[dict[str, Any]]:
         iter_completed: list[dict[str, Any]] = []
         clean = self._strip_think(response.content)
         if clean:
             reasoning_snippets.append(clean[:200])
+            if on_visible_assistant_turn is not None:
+                await on_visible_assistant_turn(clean)
         if on_tool_hint:
-            hint_text = self._tool_hint(response.tool_calls)
+            hint_text = self._tool_hint(response.tool_calls, lang=tool_hint_lang)
+            if hint_text and on_visible_assistant_turn is not None and self._tool_hints_enabled():
+                await on_visible_assistant_turn(hint_text)
             await on_tool_hint(hint_text)
             if on_event:
                 await on_event(
@@ -1961,6 +2196,8 @@ class AgentLoop:
         return_interrupt: Literal[False] = False,
         tool_signal_text: str | None = None,
         on_event: Callable[[StreamEvent], Awaitable[None]] | None = None,
+        on_visible_assistant_turn: Callable[[str], Awaitable[None]] | None = None,
+        tool_hint_lang: str | None = None,
     ) -> tuple[str | None, list[str], list[str], int, list[str]]: ...
 
     @overload
@@ -1973,6 +2210,8 @@ class AgentLoop:
         return_interrupt: Literal[True] = True,
         tool_signal_text: str | None = None,
         on_event: Callable[[StreamEvent], Awaitable[None]] | None = None,
+        on_visible_assistant_turn: Callable[[str], Awaitable[None]] | None = None,
+        tool_hint_lang: str | None = None,
     ) -> tuple[
         str | None,
         list[str],
@@ -1993,6 +2232,8 @@ class AgentLoop:
         return_interrupt: bool = False,
         tool_signal_text: str | None = None,
         on_event: Callable[[StreamEvent], Awaitable[None]] | None = None,
+        on_visible_assistant_turn: Callable[[str], Awaitable[None]] | None = None,
+        tool_hint_lang: str | None = None,
     ) -> (
         tuple[str | None, list[str], list[str], int, list[str]]
         | tuple[
@@ -2108,6 +2349,8 @@ class AgentLoop:
                     completed_tool_msgs=_completed_tool_msgs,
                     tool_budget=tool_budget,
                     on_event=on_event,
+                    on_visible_assistant_turn=on_visible_assistant_turn,
+                    tool_hint_lang=tool_hint_lang,
                 )
                 if state.interrupted:
                     break
@@ -2445,6 +2688,7 @@ class AgentLoop:
         experience_items: list[Any],
     ) -> list[dict[str, Any]]:
         history = self._prepare_user_history_for_context(session, msg)
+        session_notes = self._build_child_session_notes(session.key)
         return self.context.build_messages(
             history=history,
             current_message=msg.content,
@@ -2455,7 +2699,35 @@ class AgentLoop:
             related_experience=experience_items or None,
             model=self.model,
             plan_state=session.metadata.get(plan_state.PLAN_STATE_KEY),
+            session_notes=session_notes,
         )
+
+    def _build_child_session_notes(self, parent_session_key: str) -> list[str]:
+        child_sessions = self.sessions.list_child_sessions(parent_session_key)
+        if not child_sessions:
+            return []
+        lines = [
+            "Child sessions below are read-only desktop threads. Continue one by calling "
+            "spawn(task=..., child_session_key=...) from the parent conversation.",
+        ]
+        for child in child_sessions[:8]:
+            metadata = child.get("metadata") if isinstance(child, dict) else None
+            if not isinstance(metadata, dict):
+                continue
+            child_session_key = str(child.get("key") or "").strip()
+            if not child_session_key:
+                continue
+            label = str(
+                metadata.get("task_label") or metadata.get("title") or child_session_key
+            ).strip()
+            status = str(metadata.get("child_status") or "completed").strip() or "completed"
+            summary = str(metadata.get("last_result_summary") or "").strip()
+            line = f"- child_session_key={child_session_key} | label={label} | status={status}"
+            if summary:
+                preview = summary[:120] + ("..." if len(summary) > 120 else "")
+                line += f" | last_result={preview}"
+            lines.append(line)
+        return lines if len(lines) > 1 else []
 
     def _unpack_process_message_run_result(
         self, run_result: tuple[Any, ...]
@@ -2630,6 +2902,43 @@ class AgentLoop:
             return True
         return False
 
+    async def _persist_display_only_assistant_turn(
+        self,
+        *,
+        session: Session,
+        content: str,
+        source: str = "assistant-progress",
+    ) -> None:
+        visible_text = (self._strip_think(content) or "").strip()
+        if not visible_text:
+            return
+        last_message = session.messages[-1] if session.messages else None
+        if (
+            isinstance(last_message, dict)
+            and last_message.get("role") == "assistant"
+            and last_message.get("content") == visible_text
+            and last_message.get("_source") == source
+        ):
+            return
+        session.add_message("assistant", visible_text, status="done", _source=source)
+        await asyncio.to_thread(self.sessions.save, session)
+
+    async def _set_session_running_metadata(self, key: str, is_running: bool) -> None:
+        try:
+            await asyncio.to_thread(
+                self.sessions.update_metadata_only,
+                key,
+                {"session_running": bool(is_running)},
+            )
+        except Exception as exc:
+            logger.debug("Skip session running metadata update {}: {}", key, exc)
+
+    def _tool_hints_enabled(self) -> bool:
+        defaults = getattr(getattr(self._config, "agents", None), "defaults", None)
+        if defaults is None:
+            return True
+        return bool(getattr(defaults, "send_tool_hints", True))
+
     def _build_user_outbound_message(
         self, msg: InboundMessage, final_content: str
     ) -> OutboundMessage:
@@ -2695,6 +3004,9 @@ class AgentLoop:
         active_override = self.sessions.get_active_session_key(natural_key)
         key = active_override or natural_key
         session = self.sessions.get_or_create(key)
+        track_running = msg.channel != "desktop" and not msg.metadata.get("_ephemeral")
+        if track_running and session.metadata.get("session_running") is not True:
+            await self._set_session_running_metadata(session.key, True)
 
         # Handle slash commands
         cmd = msg.content.strip().lower()
@@ -2905,13 +3217,17 @@ class AgentLoop:
         )
         if (t := self.tools.get("message")) and isinstance(t, MessageTool):
             t.start_turn()
-        _results = await asyncio.gather(
-            asyncio.to_thread(self.context.memory.search_memory, msg.content),
-            asyncio.to_thread(self.context.memory.search_experience, msg.content),
-            return_exceptions=True,
-        )
-        related = _results[0] if not isinstance(_results[0], BaseException) else []
-        experience = _results[1] if not isinstance(_results[1], BaseException) else []
+        if self.context.memory.should_skip_retrieval(msg.content):
+            related = []
+            experience = []
+        else:
+            _results = await asyncio.gather(
+                asyncio.to_thread(self.context.memory.search_memory, msg.content),
+                asyncio.to_thread(self.context.memory.search_experience, msg.content),
+                return_exceptions=True,
+            )
+            related = _results[0] if not isinstance(_results[0], BaseException) else []
+            experience = _results[1] if not isinstance(_results[1], BaseException) else []
         initial_messages = self._build_initial_messages_for_user_turn(
             session,
             msg,
@@ -2923,102 +3239,115 @@ class AgentLoop:
             session.add_message("user", msg.content)
             await asyncio.to_thread(self.sessions.save, session)
 
-        async def _bus_publish(content: str, *, is_tool_hint: bool = False) -> None:
-            if content == PROGRESS_RESET and not is_tool_hint:
-                return
-            meta = dict(msg.metadata or {})
-            meta["_progress"] = True
-            if is_tool_hint:
-                logger.debug("Tool hint sent to {}:{}: {}", msg.channel, msg.chat_id, content)
-                meta["_tool_hint"] = True
-            await self.bus.publish_outbound(
-                OutboundMessage(
+        try:
+
+            async def _bus_publish(content: str, *, is_tool_hint: bool = False) -> None:
+                if content == PROGRESS_RESET and not is_tool_hint:
+                    return
+                meta = dict(msg.metadata or {})
+                meta["_progress"] = True
+                if is_tool_hint:
+                    logger.debug("Tool hint sent to {}:{}: {}", msg.channel, msg.chat_id, content)
+                    meta["_tool_hint"] = True
+                await self.bus.publish_outbound(
+                    OutboundMessage(
+                        channel=msg.channel,
+                        chat_id=msg.chat_id,
+                        content=content,
+                        metadata=meta,
+                    )
+                )
+
+            return_interrupt_flag: bool = True
+            tool_signal_text = plan_state.plan_signal_text(
+                session.metadata.get(plan_state.PLAN_STATE_KEY)
+            )
+
+            async def _persist_visible_assistant_turn(content: str) -> None:
+                await self._persist_display_only_assistant_turn(session=session, content=content)
+
+            run_result = await self._run_agent_loop(
+                initial_messages,
+                on_progress=on_progress or _bus_publish,
+                on_tool_hint=lambda c: _bus_publish(c, is_tool_hint=True),
+                artifact_session_key=session.key,
+                return_interrupt=return_interrupt_flag,
+                tool_signal_text=tool_signal_text,
+                on_event=on_event,
+                on_visible_assistant_turn=_persist_visible_assistant_turn,
+                tool_hint_lang=session_lang,
+            )
+            parsed_result = self._unpack_process_message_run_result(
+                cast(tuple[Any, ...], run_result)
+            )
+
+            if parsed_result.interrupted:
+                self._handle_interrupted_process_message(
+                    session,
+                    msg,
+                    completed_tool_msgs=parsed_result.completed_tool_msgs,
+                )
+                return None
+
+            generation_key = expected_generation_key or msg.session_key
+            if self._is_stale_generation(
+                expected_generation,
+                generation_key,
+                "Suppressing stale completion before persistence for session {}",
+            ):
+                return None
+
+            final_content = parsed_result.final_content
+
+            if not isinstance(final_content, str) or not final_content.strip():
+                final_content = "处理完成。" if session_lang != "en" else "Completed."
+
+            assistant_status = "error" if parsed_result.provider_error else "done"
+
+            if self._is_stale_generation(
+                expected_generation,
+                generation_key,
+                "Suppressing stale side-effects before persistence for session {}",
+            ):
+                return None
+
+            self._maybe_learn_experience(
+                session=session,
+                user_request=msg.content,
+                final_response=final_content,
+                tools_used=parsed_result.tools_used,
+                tool_trace=parsed_result.tool_trace,
+                total_errors=parsed_result.total_errors,
+                reasoning_snippets=parsed_result.reasoning_snippets,
+            )
+            self._persist_tool_observability(session, channel=msg.channel, session_key=key)
+
+            if await self._persist_assistant_turn(
+                session=session,
+                key=key,
+                final_content=final_content,
+                tools_used=parsed_result.tools_used,
+                assistant_status=assistant_status,
+            ):
+                await self._clear_progress_buffer(
                     channel=msg.channel,
                     chat_id=msg.chat_id,
-                    content=content,
-                    metadata=meta,
+                    metadata=msg.metadata,
                 )
-            )
+                logger.debug(
+                    "Suppressing duplicate outbound after message tool send for {}:{}",
+                    msg.channel,
+                    msg.chat_id,
+                )
+                return None
 
-        return_interrupt_flag: bool = True
-        tool_signal_text = plan_state.plan_signal_text(
-            session.metadata.get(plan_state.PLAN_STATE_KEY)
-        )
-        run_result = await self._run_agent_loop(
-            initial_messages,
-            on_progress=on_progress or _bus_publish,
-            on_tool_hint=lambda c: _bus_publish(c, is_tool_hint=True),
-            artifact_session_key=session.key,
-            return_interrupt=return_interrupt_flag,
-            tool_signal_text=tool_signal_text,
-            on_event=on_event,
-        )
-        parsed_result = self._unpack_process_message_run_result(cast(tuple[Any, ...], run_result))
+            preview = final_content[:120] + "..." if len(final_content) > 120 else final_content
+            logger.info("💬 回复消息 / out: {}:{}: {}", msg.channel, msg.sender_id, preview)
 
-        if parsed_result.interrupted:
-            self._handle_interrupted_process_message(
-                session,
-                msg,
-                completed_tool_msgs=parsed_result.completed_tool_msgs,
-            )
-            return None
-
-        generation_key = expected_generation_key or msg.session_key
-        if self._is_stale_generation(
-            expected_generation,
-            generation_key,
-            "Suppressing stale completion before persistence for session {}",
-        ):
-            return None
-
-        final_content = parsed_result.final_content
-
-        if not isinstance(final_content, str) or not final_content.strip():
-            final_content = "处理完成。" if session_lang != "en" else "Completed."
-
-        assistant_status = "error" if parsed_result.provider_error else "done"
-
-        if self._is_stale_generation(
-            expected_generation,
-            generation_key,
-            "Suppressing stale side-effects before persistence for session {}",
-        ):
-            return None
-
-        self._maybe_learn_experience(
-            session=session,
-            user_request=msg.content,
-            final_response=final_content,
-            tools_used=parsed_result.tools_used,
-            tool_trace=parsed_result.tool_trace,
-            total_errors=parsed_result.total_errors,
-            reasoning_snippets=parsed_result.reasoning_snippets,
-        )
-        self._persist_tool_observability(session, channel=msg.channel, session_key=key)
-
-        if await self._persist_assistant_turn(
-            session=session,
-            key=key,
-            final_content=final_content,
-            tools_used=parsed_result.tools_used,
-            assistant_status=assistant_status,
-        ):
-            await self._clear_progress_buffer(
-                channel=msg.channel,
-                chat_id=msg.chat_id,
-                metadata=msg.metadata,
-            )
-            logger.debug(
-                "Suppressing duplicate outbound after message tool send for {}:{}",
-                msg.channel,
-                msg.chat_id,
-            )
-            return None
-
-        preview = final_content[:120] + "..." if len(final_content) > 120 else final_content
-        logger.info("💬 回复消息 / out: {}:{}: {}", msg.channel, msg.sender_id, preview)
-
-        return self._build_user_outbound_message(msg, final_content)
+            return self._build_user_outbound_message(msg, final_content)
+        finally:
+            if track_running:
+                await self._set_session_running_metadata(session.key, False)
 
     @staticmethod
     def _resolve_system_message_inputs(msg: InboundMessage) -> tuple[str, str]:
@@ -3064,7 +3393,7 @@ class AgentLoop:
         if (t := self.tools.get("message")) and isinstance(t, MessageTool):
             t.start_turn()
         system_prompt_text, search_query = self._resolve_system_message_inputs(msg)
-        if search_query.strip():
+        if search_query.strip() and not self.context.memory.should_skip_retrieval(search_query):
             _results = await asyncio.gather(
                 asyncio.to_thread(self.context.memory.search_memory, search_query),
                 asyncio.to_thread(self.context.memory.search_experience, search_query),
@@ -3094,6 +3423,7 @@ class AgentLoop:
             artifact_session_key=session.key,
             return_interrupt=return_interrupt_flag,
             tool_signal_text=tool_signal_text,
+            tool_hint_lang=session_lang,
         )
         result_parts = cast(tuple[Any, ...], run_result)
 

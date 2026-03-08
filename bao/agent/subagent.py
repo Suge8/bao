@@ -27,6 +27,7 @@ from bao.runtime_diagnostics import get_runtime_diagnostics_store
 
 if TYPE_CHECKING:
     from bao.config.schema import ExecToolConfig, WebSearchConfig
+    from bao.session.manager import SessionManager
 
 
 _SUBAGENT_ERROR_KEYWORDS = ("error:", "traceback", "failed", "exception", "permission denied")
@@ -39,6 +40,7 @@ class TaskStatus:
     label: str
     task_description: str
     origin: dict[str, str]
+    child_session_key: str | None = None
     status: str = "running"  # running | completed | failed | cancelled
     iteration: int = 0
     max_iterations: int = 20
@@ -86,6 +88,7 @@ class SubagentManager:
         memory_store: Any | None = None,
         image_generation_config: Any | None = None,
         desktop_config: Any | None = None,
+        sessions: "SessionManager | None" = None,
         utility_provider: LLMProvider | None = None,
         utility_model: str | None = None,
         experience_mode: str = "utility",
@@ -105,6 +108,7 @@ class SubagentManager:
         self.restrict_to_workspace = restrict_to_workspace
         self.image_generation_config = image_generation_config
         self.desktop_config = desktop_config
+        self.sessions = sessions
         self.max_iterations = max(1, int(max_iterations))
         self._ctx_mgmt = context_management
         self._tool_offload_chars = max(1, int(tool_output_offload_chars))
@@ -146,6 +150,7 @@ class SubagentManager:
         origin_chat_id: str = "direct",
         session_key: str | None = None,
         context_from: str | None = None,
+        child_session_key: str | None = None,
     ) -> str:
         task_id = uuid.uuid4().hex[:12]
         while task_id in self._task_statuses or task_id in self._running_tasks:
@@ -157,6 +162,19 @@ class SubagentManager:
         origin = {"channel": origin_channel, "chat_id": origin_chat_id}
         if session_key:
             origin["session_key"] = session_key
+        child_key_error = self._validate_explicit_child_session_key(
+            parent_session_key=session_key,
+            child_session_key=child_session_key,
+        )
+        if child_key_error:
+            return f"Spawn failed: {child_key_error}"
+        resolved_child_session_key = self._resolve_child_session_key(
+            parent_session_key=session_key,
+            child_session_key=child_session_key,
+            lineage_id=task_id,
+        )
+        if resolved_child_session_key:
+            origin["child_session_key"] = resolved_child_session_key
 
         prev: TaskStatus | None = None
         resume_context: str | None = None
@@ -167,6 +185,7 @@ class SubagentManager:
 
         self._task_statuses[task_id] = TaskStatus(
             task_id=task_id,
+            child_session_key=resolved_child_session_key,
             label=safe_label,
             task_description=task[:200],
             origin=origin,
@@ -193,6 +212,8 @@ class SubagentManager:
 
         logger.info("🚀 启动子代 / subagent spawned: [{}]: {}", task_id, safe_label)
         result = f'Spawned task_id={task_id} label="{safe_label}"'
+        if resolved_child_session_key:
+            result += f" child_session_key={resolved_child_session_key}"
         if context_from:
             if not prev or prev.status not in ("completed", "failed"):
                 visible_context_from = self._sanitize_visible(context_from)
@@ -263,6 +284,138 @@ class SubagentManager:
             f"Previous task: {prev.task_description[:200]}\n"
             f"Previous result: {prev.result_summary or 'no summary'}"
         )
+
+    @staticmethod
+    def _child_session_family_key(parent_session_key: str) -> str:
+        return f"subagent:{parent_session_key}"
+
+    @classmethod
+    def _build_child_session_key(cls, parent_session_key: str, lineage_id: str) -> str:
+        return f"{cls._child_session_family_key(parent_session_key)}::{lineage_id}"
+
+    def _resolve_child_session_key(
+        self,
+        *,
+        parent_session_key: str | None,
+        child_session_key: str | None,
+        lineage_id: str,
+    ) -> str | None:
+        if isinstance(child_session_key, str) and child_session_key.strip():
+            return child_session_key.strip()
+        if not isinstance(parent_session_key, str) or not parent_session_key:
+            return None
+        return self._build_child_session_key(parent_session_key, lineage_id)
+
+    def _validate_explicit_child_session_key(
+        self,
+        *,
+        parent_session_key: str | None,
+        child_session_key: str | None,
+    ) -> str | None:
+        if not isinstance(child_session_key, str) or not child_session_key.strip():
+            return None
+        if self.sessions is None:
+            return None
+        if not isinstance(parent_session_key, str) or not parent_session_key:
+            return "child_session_key requires a parent session"
+        candidate = child_session_key.strip()
+        if not self.sessions.session_exists(candidate):
+            return f"unknown child_session_key '{candidate}'"
+        session = self.sessions.get_or_create(candidate)
+        if session.metadata.get("parent_session_key") != parent_session_key:
+            return "child_session_key does not belong to this parent session"
+        return None
+
+    def _persist_child_session_metadata(
+        self,
+        child_session_key: str,
+        *,
+        parent_session_key: str,
+        label: str,
+        status: str,
+        task_id: str,
+        summary: str | None = None,
+    ) -> None:
+        if self.sessions is None:
+            return
+        session = self.sessions.get_or_create(child_session_key)
+        session.metadata.update(
+            {
+                "title": label,
+                "session_kind": "subagent_child",
+                "read_only": True,
+                "parent_session_key": parent_session_key,
+                "task_label": label,
+                "child_status": status,
+                "active_task_id": task_id if status == "running" else "",
+                "last_result_summary": summary or "",
+            }
+        )
+        self.sessions.save(session)
+
+    def _persist_child_user_turn(
+        self,
+        child_session_key: str,
+        *,
+        parent_session_key: str,
+        label: str,
+        task_id: str,
+        task: str,
+    ) -> None:
+        if self.sessions is None:
+            return
+        session = self.sessions.get_or_create(child_session_key)
+        session.metadata.update(
+            {
+                "title": label,
+                "session_kind": "subagent_child",
+                "read_only": True,
+                "parent_session_key": parent_session_key,
+                "task_label": label,
+                "child_status": "running",
+                "active_task_id": task_id,
+            }
+        )
+        session.add_message("user", task)
+        self.sessions.save(session)
+
+    def _persist_child_result(
+        self,
+        child_session_key: str,
+        *,
+        parent_session_key: str,
+        label: str,
+        task_id: str,
+        result: str,
+        status: str,
+    ) -> None:
+        if self.sessions is None:
+            return
+        session = self.sessions.get_or_create(child_session_key)
+        session.metadata.update(
+            {
+                "title": label,
+                "session_kind": "subagent_child",
+                "read_only": True,
+                "parent_session_key": parent_session_key,
+                "task_label": label,
+                "child_status": status,
+                "active_task_id": "",
+                "last_result_summary": self._sanitize_visible(result),
+            }
+        )
+        assistant_status = "done" if status == "completed" else "error"
+        session.add_message("assistant", result, status=assistant_status)
+        self.sessions.save(session)
+
+    def _child_session_history(self, child_session_key: str) -> list[dict[str, Any]]:
+        if self.sessions is None or not self.sessions.session_exists(child_session_key):
+            return []
+        session = self.sessions.get_or_create(child_session_key)
+        history = session.get_history(max_messages=80)
+        return [
+            dict(message) for message in history if message.get("role") in {"user", "assistant"}
+        ]
 
     @staticmethod
     def _redact_tool_args_for_log(tool_name: str, args: dict[str, Any]) -> str:
@@ -635,6 +788,7 @@ class SubagentManager:
         task_id: str,
         task: str,
         *,
+        child_session_key: str | None,
         channel: str | None,
         has_search: bool,
         has_browser: bool,
@@ -652,10 +806,8 @@ class SubagentManager:
             related_memory=related_memory,
             related_experience=related_experience,
         )
-        messages: list[dict[str, Any]] = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": task},
-        ]
+        history = self._child_session_history(child_session_key) if child_session_key else []
+        messages: list[dict[str, Any]] = [{"role": "system", "content": system_prompt}, *history]
 
         current = self.get_task_status(task_id)
         resume_ctx = current.resume_context if current else None
@@ -667,6 +819,9 @@ class SubagentManager:
                 logger.debug("context_from={} not found or not finished, ignoring", context_from)
         if resume_ctx:
             messages.insert(1, {"role": "user", "content": resume_ctx})
+
+        if not history:
+            messages.append({"role": "user", "content": task})
 
         return messages, list(messages)
 
@@ -1013,6 +1168,17 @@ class SubagentManager:
             tool_steps=tool_step,
             result_summary=final_result[:500] if final_result else None,
         )
+        child_session_key = origin.get("child_session_key")
+        parent_session_key = origin.get("session_key")
+        if child_session_key and parent_session_key:
+            self._persist_child_result(
+                child_session_key,
+                parent_session_key=parent_session_key,
+                label=label,
+                task_id=task_id,
+                result=final_result,
+                status="completed",
+            )
 
         logger.info("✅ 子代完成 / subagent done: [{}]", task_id)
         await self._announce_result_non_fatal(task_id, label, task, final_result, origin, "ok")
@@ -1033,6 +1199,17 @@ class SubagentManager:
             phase="failed",
             result_summary=error_msg[:500],
         )
+        child_session_key = origin.get("child_session_key")
+        parent_session_key = origin.get("session_key")
+        if child_session_key and parent_session_key:
+            self._persist_child_result(
+                child_session_key,
+                parent_session_key=parent_session_key,
+                label=label,
+                task_id=task_id,
+                result=error_msg,
+                status="failed",
+            )
         status = self._task_statuses.get(task_id)
         status_code = (
             status.last_error_code if status and status.last_error_code else "subagent_failed"
@@ -1067,6 +1244,16 @@ class SubagentManager:
     ) -> None:
         logger.info("🚀 子代启动 / subagent start: [{}]: {}", task_id, label)
         try:
+            child_session_key = origin.get("child_session_key")
+            parent_session_key = origin.get("session_key")
+            if child_session_key and parent_session_key:
+                self._persist_child_user_turn(
+                    child_session_key,
+                    parent_session_key=parent_session_key,
+                    label=label,
+                    task_id=task_id,
+                    task=task,
+                )
             tools, coding_tool, coding_tools, has_search, has_browser = self._setup_subagent_tools(
                 task_id, origin
             )
@@ -1076,6 +1263,7 @@ class SubagentManager:
             messages, initial_messages = self._prepare_subagent_messages(
                 task_id,
                 task,
+                child_session_key=child_session_key,
                 channel=origin.get("channel"),
                 has_search=has_search,
                 has_browser=has_browser,
@@ -1236,6 +1424,17 @@ class SubagentManager:
 
         except asyncio.CancelledError:
             self._update_status(task_id, status="cancelled", phase="cancelled")
+            child_session_key = origin.get("child_session_key")
+            parent_session_key = origin.get("session_key")
+            if child_session_key and parent_session_key:
+                self._persist_child_result(
+                    child_session_key,
+                    parent_session_key=parent_session_key,
+                    label=label,
+                    task_id=task_id,
+                    result="Cancelled by user.",
+                    status="cancelled",
+                )
             logger.info("👋 子代终止 / subagent stopped: [{}]", task_id)
 
         except Exception as e:
@@ -1401,8 +1600,9 @@ You are a subagent spawned by the main agent to complete a specific task.
 
 ## Workspace
 Your workspace is at: {self.workspace}
-Skills may live in either of these locations (read SKILL.md files as needed):
+Skills may live in either of these locations:
 - workspace overrides: {self.workspace}/skills/
 - built-in skills: {Path(__file__).resolve().parent.parent / "skills"}
+If the task matches a skill in those locations, read that `SKILL.md` before any substantive action.
 
 When you have completed the task, provide a clear summary of your findings or actions.{memory_section}{format_section}"""

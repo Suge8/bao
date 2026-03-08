@@ -58,6 +58,41 @@ MEMORY_CATEGORY_CAPS = {
     "general": 300,
 }
 
+_LOW_INFORMATION_QUERIES = frozenset(
+    {
+        "ok",
+        "okay",
+        "thanks",
+        "thankyou",
+        "thx",
+        "gotit",
+        "roger",
+        "sure",
+        "yes",
+        "no",
+        "hi",
+        "hello",
+        "收到",
+        "知道了",
+        "明白了",
+        "好的",
+        "好哦",
+        "行",
+        "可以",
+        "继续",
+        "谢谢",
+        "多谢",
+        "辛苦了",
+        "嗯",
+        "嗯嗯",
+        "哦",
+        "哦哦",
+        "嗨",
+        "你好",
+        "好",
+    }
+)
+
 # Category importance weights for rerank scoring (higher = more important to retain)
 _CATEGORY_WEIGHTS: dict[str, float] = {
     "preference": 1.0,
@@ -711,19 +746,14 @@ class MemoryStore:
         """Read long-term memory. If category given, read that category only."""
         with self._store_lock:
             try:
-                if category:
-                    rows = (
-                        self._tbl.search()
-                        .where(f"type = 'long_term' AND category = '{category}'")
-                        .limit(1)
-                        .to_list()
-                    )
-                else:
-                    rows = self._tbl.search().where("type = 'long_term'").limit(20).to_list()
+                rows = self._read_long_term_rows_locked()
                 if not rows:
                     return ""
                 if category:
-                    return rows[0].get("content", "")
+                    for row in rows:
+                        if (row.get("category") or "general") == category:
+                            return row.get("content", "")
+                    return ""
                 parts = []
                 for r in rows:
                     cat = r.get("category") or "general"
@@ -733,6 +763,9 @@ class MemoryStore:
                 return "\n".join(parts)
             except Exception:
                 return ""
+
+    def _read_long_term_rows_locked(self) -> list[dict[str, Any]]:
+        return self._tbl.search().where("type = 'long_term'").limit(20).to_list()
 
     def list_long_term_entries(self) -> list[dict[str, str]]:
         with self._store_lock:
@@ -787,13 +820,11 @@ class MemoryStore:
                 return False
 
     def _read_long_term_content_locked(self, category: str) -> str:
-        rows = (
-            self._tbl.search()
-            .where(f"type = 'long_term' AND category = '{category}'")
-            .limit(1)
-            .to_list()
-        )
-        return str(rows[0].get("content", "")) if rows else ""
+        rows = self._read_long_term_rows_locked()
+        for row in rows:
+            if (row.get("category") or "general") == category:
+                return str(row.get("content", ""))
+        return ""
 
     def _upsert_long_term_locked(self, category: str, normalized: str) -> bool:
         current = self._read_long_term_content_locked(category)
@@ -976,6 +1007,8 @@ class MemoryStore:
                 return []
 
     def search_memory(self, query: str, limit: int = 5) -> list[str]:
+        if self.should_skip_retrieval(query):
+            return []
         embed_fn = self._embed_fn
         fetch = max(limit * 3, 6)
         vec_enriched: list[dict[str, Any]] = []
@@ -1062,48 +1095,48 @@ class MemoryStore:
 
     def search_experience(self, query: str, limit: int = 3) -> list[str]:
         """Search experiences with scoring + conflict detection + hit tracking."""
-        with self._store_lock:
-            candidates = self._fetch_experience_candidates(query, limit * 5)
-            now = datetime.now()
-            # (score, row_dict, content, category, outcome)
-            positive: list[tuple[float, dict[str, Any], str, str, str]] = []
-            warnings: list[tuple[float, dict[str, Any], str, str]] = []
-            for r in candidates:
-                if "quality" not in r and "outcome" not in r and "updated_at" not in r:
-                    continue
-                if r.get("deprecated"):
-                    continue
-                quality = r.get("quality", 3)
-                days_old = self._days_since(r.get("updated_at", ""), now)
-                decay = exp(-days_old / _RETENTION_DAYS.get(quality, 90))
-                conf = self._confidence(r)
-                score = quality * decay * conf
-                content = r.get("content") or ""
-                outcome = r.get("outcome", "")
-                if outcome == "failed":
-                    warnings.append((score, r, content, r.get("category") or "general"))
-                else:
-                    positive.append(
-                        (score, r, content, r.get("category") or "general", outcome or "success")
-                    )
-            positive.sort(key=lambda x: x[0], reverse=True)
-            warnings.sort(key=lambda x: x[0], reverse=True)
-            results: list[str] = []
-            hit_rows: list[dict[str, Any]] = []
-            seen_categories: dict[str, str] = {}
-            for _, row, content, cat, outcome_str in positive:
-                if len(results) >= limit - 1:
-                    break
-                prev = seen_categories.get(cat)
-                if prev and prev != outcome_str:
-                    content = f"\u26a1 CONFLICTING experience (category '{cat}'):\n{content}"
-                seen_categories.setdefault(cat, outcome_str)
-                results.append(content)
-                hit_rows.append(row)
-            if warnings:
-                results.append(f"\u26a0\ufe0f WARNING from past failure:\n{warnings[0][2]}")
-                hit_rows.append(warnings[0][1])
-            final = results[:limit]
+        if self.should_skip_retrieval(query):
+            return []
+        candidates = self._fetch_experience_candidates(query, limit * 5)
+        now = datetime.now()
+        positive: list[tuple[float, dict[str, Any], str, str, str]] = []
+        warnings: list[tuple[float, dict[str, Any], str, str]] = []
+        for r in candidates:
+            if "quality" not in r and "outcome" not in r and "updated_at" not in r:
+                continue
+            if r.get("deprecated"):
+                continue
+            quality = r.get("quality", 3)
+            days_old = self._days_since(r.get("updated_at", ""), now)
+            decay = exp(-days_old / _RETENTION_DAYS.get(quality, 90))
+            conf = self._confidence(r)
+            score = quality * decay * conf
+            content = r.get("content") or ""
+            outcome = r.get("outcome", "")
+            if outcome == "failed":
+                warnings.append((score, r, content, r.get("category") or "general"))
+            else:
+                positive.append(
+                    (score, r, content, r.get("category") or "general", outcome or "success")
+                )
+        positive.sort(key=lambda x: x[0], reverse=True)
+        warnings.sort(key=lambda x: x[0], reverse=True)
+        results: list[str] = []
+        hit_rows: list[dict[str, Any]] = []
+        seen_categories: dict[str, str] = {}
+        for _, row, content, cat, outcome_str in positive:
+            if len(results) >= limit - 1:
+                break
+            prev = seen_categories.get(cat)
+            if prev and prev != outcome_str:
+                content = f"\u26a1 CONFLICTING experience (category '{cat}'):\n{content}"
+            seen_categories.setdefault(cat, outcome_str)
+            results.append(content)
+            hit_rows.append(row)
+        if warnings:
+            results.append(f"\u26a0\ufe0f WARNING from past failure:\n{warnings[0][2]}")
+            hit_rows.append(warnings[0][1])
+        final = results[:limit]
         # Update hit stats outside the main lock (best-effort)
         if hit_rows:
             self._schedule_hit_stats_update(hit_rows)
@@ -1117,16 +1150,21 @@ class MemoryStore:
                 vec = vectors[0] if vectors else None
                 if not isinstance(vec, Sized) or len(vec) == 0:
                     raise ValueError("query embedding returned empty vector")
-                vec_rows = (
-                    self._vec_tbl.search(vec).where("type = 'experience'").limit(fetch).to_list()
-                )
+                with self._store_lock:
+                    vec_rows = (
+                        self._vec_tbl.search(vec)
+                        .where("type = 'experience'")
+                        .limit(fetch)
+                        .to_list()
+                    )
                 if vec_rows:
                     if enriched := self._enrich_vector_results(vec_rows):
                         return enriched
             except Exception as e:
                 logger.warning("⚠️ 经验检索失败 / experience search failed: {}", e)
         try:
-            rows = self._tbl.search().where("type = 'experience'").limit(100).to_list()
+            with self._store_lock:
+                rows = self._tbl.search().where("type = 'experience'").limit(100).to_list()
             ranked = self._bm25_rank(query, rows)
             return [r for _, r in ranked] if ranked else rows
         except Exception as e:
@@ -1448,6 +1486,19 @@ class MemoryStore:
         return tokens
 
     @staticmethod
+    def _normalize_low_information_query(query: str) -> str:
+        return (
+            query.lower()
+            .replace(" ", "")
+            .replace("\n", "")
+            .strip(".,;:!?()[]{}\"'`~。？！；：、，…")
+        )
+
+    def should_skip_retrieval(self, query: str) -> bool:
+        normalized = self._normalize_low_information_query(query)
+        return not normalized or normalized in _LOW_INFORMATION_QUERIES
+
+    @staticmethod
     def _bm25_rank(
         query: str, docs: list[dict[str, Any]], *, k1: float = 1.2, b: float = 0.75
     ) -> list[tuple[float, dict[str, Any]]]:
@@ -1498,13 +1549,27 @@ class MemoryStore:
         )
         return [r["content"] for r in rows if r.get("content")]
 
-    def get_memory_context(self, max_chars: int | None = None) -> str:
+    def _collect_long_term_parts(
+        self, *, query_tokens: set[str] | None = None
+    ) -> list[tuple[str, str]]:
+        with self._store_lock:
+            rows = self._read_long_term_rows_locked()
+        content_by_category = {
+            str(row.get("category") or "general"): str(row.get("content", "")).strip()
+            for row in rows
+        }
         parts: list[tuple[str, str]] = []
         for cat in MEMORY_CATEGORIES:
-            content = self.read_long_term(cat).strip()
-            if content:
-                parts.append((cat, content))
+            content = content_by_category.get(cat, "")
+            if not content:
+                continue
+            if query_tokens is not None and not (query_tokens & set(self._tokenize(content))):
+                continue
+            parts.append((cat, content))
+        return parts
 
+    @staticmethod
+    def _format_long_term_parts(parts: list[tuple[str, str]], max_chars: int | None = None) -> str:
         if not parts:
             return ""
 
@@ -1528,7 +1593,6 @@ class MemoryStore:
             if total_raw <= usable:
                 budgeted.append(f"[{cat}] {content}")
                 continue
-
             share = int(usable * len(content) / total_raw)
             if share <= 0:
                 continue
@@ -1541,64 +1605,22 @@ class MemoryStore:
         result = "\n".join(budgeted)
         return f"{header}{result}" if budgeted else ""
 
+    def get_memory_context(self, max_chars: int | None = None) -> str:
+        parts = self._collect_long_term_parts()
+        return self._format_long_term_parts(parts, max_chars=max_chars)
+
     def get_relevant_memory_context(self, query: str, max_chars: int | None = None) -> str:
         """Like get_memory_context but filters categories by relevance to query.
         Categories with no keyword overlap are skipped, saving tokens.
-        Falls back to full injection if query is too short to filter reliably.
+        Returns empty when the query is too weak or nothing matches.
         """
-        if not query:
-            return self.get_memory_context(max_chars=max_chars)
+        if self.should_skip_retrieval(query):
+            return ""
         query_tokens = set(self._tokenize(query))
         if not query_tokens:
-            return self.get_memory_context(max_chars=max_chars)
-
-        parts: list[tuple[str, str]] = []
-        for cat in MEMORY_CATEGORIES:
-            content = self.read_long_term(cat).strip()
-            if not content:
-                continue
-            content_tokens = set(self._tokenize(content))
-            overlap = len(query_tokens & content_tokens)
-            # Low threshold: even 1 shared keyword is enough to include
-            if overlap >= 1:
-                parts.append((cat, content))
-
-        if not parts:
-            # No category matched — fall back to full context to avoid empty memory
-            return self.get_memory_context(max_chars=max_chars)
-
-        # Reuse the same budget logic as get_memory_context
-        header = "## Long-term Memory\n"
-        if max_chars is None:
-            result = "\n".join(f"[{cat}] {content}" for cat, content in parts)
-            return f"{header}{result}"
-
-        if max_chars <= len(header):
             return ""
-
-        body_budget = max_chars - len(header)
-        prefix_overhead = sum(len(f"[{cat}] ") for cat, _ in parts) + max(0, len(parts) - 1)
-        usable = body_budget - prefix_overhead
-        if usable <= 0:
-            return ""
-
-        total_raw = sum(len(c) for _, c in parts)
-        budgeted: list[str] = []
-        for cat, content in parts:
-            if total_raw <= usable:
-                budgeted.append(f"[{cat}] {content}")
-                continue
-            share = int(usable * len(content) / total_raw)
-            if share <= 0:
-                continue
-            if len(content) > share:
-                if share <= 1:
-                    continue
-                content = content[: share - 1] + "\u2026"
-            budgeted.append(f"[{cat}] {content}")
-
-        result = "\n".join(budgeted)
-        return f"{header}{result}" if budgeted else ""
+        parts = self._collect_long_term_parts(query_tokens=query_tokens)
+        return self._format_long_term_parts(parts, max_chars=max_chars)
 
     # ── Explicit memory operations (for tools) ──
 
