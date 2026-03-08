@@ -157,6 +157,7 @@ class ContextBuilder:
         self.workspace = workspace
         self.memory = _LazyMemoryStoreProxy(workspace, embedding_config=embedding_config)
         self.skills = SkillsLoader(workspace)
+        self._bootstrap_cache: dict[str, tuple[tuple[int, int, int], str]] = {}
 
     def build_system_prompt(
         self,
@@ -185,11 +186,14 @@ class ContextBuilder:
             parts.append(f"""# Skills
 
 Skills are procedural guides, not your current executable tool list.
-To use one, read its `SKILL.md` via the read_file tool:
-- workspace skills: `skills/{{name}}/SKILL.md`
-- built-in skills: `bao/skills/{{name}}/SKILL.md`
+Before any substantive action, check whether the task matches a skill in this index.
+If a matching skill exists and `available="true"`, reading its `SKILL.md` before acting is mandatory.
+If multiple skills match, read the most specific domain- or format-specific skill first; broad workflow skills such as `coding-agent` are fallback.
+If the request explicitly names a framework, file type, platform, or domain, prefer the skill whose name or description matches those same terms.
+Use the matching skill entry's `path` as the exact `read_file` argument.
+The index already resolves workspace overrides, so do not reconstruct, normalize, or substitute a different path.
 Decide what you can do from the current Available now block and the current tool set, not from this index alone.
-If available="false", the skill's dependencies are not currently available.
+If `available="false"`, that skill's dependencies are not currently available, so do not rely on it.
 
 {skills_summary}""")
         if channel:
@@ -264,7 +268,14 @@ Your workspace is at: {workspace_path}"""
         for filename in self.BOOTSTRAP_FILES:
             file_path = self.workspace / filename
             if file_path.exists():
-                content = file_path.read_text(encoding="utf-8")
+                stat = file_path.stat()
+                cache_key = (stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size)
+                cached = self._bootstrap_cache.get(filename)
+                if cached is not None and cached[0] == cache_key:
+                    content = cached[1]
+                else:
+                    content = file_path.read_text(encoding="utf-8")
+                    self._bootstrap_cache[filename] = (cache_key, content)
                 header_hint = ""
                 if filename == "INSTRUCTIONS.md":
                     header_hint = (
@@ -281,6 +292,8 @@ Your workspace is at: {workspace_path}"""
                     block += header_hint + "\n\n"
                 block += content
                 parts.append(block)
+            else:
+                self._bootstrap_cache.pop(filename, None)
 
         return "\n\n".join(parts) if parts else ""
 
@@ -310,6 +323,7 @@ Your workspace is at: {workspace_path}"""
         related_memory: list[str] | None = None,
         related_experience: list[str] | None = None,
         plan_state: dict[str, Any] | None = None,
+        session_notes: list[str] | None = None,
         *,
         model: str | None = None,
     ) -> list[dict[str, Any]]:
@@ -322,6 +336,17 @@ Your workspace is at: {workspace_path}"""
             plan_block = format_plan_for_prompt(plan_state)
             if plan_block:
                 system_prompt += f"\n\n{plan_block}"
+
+        if session_notes:
+            note_block = "\n".join(
+                note for note in session_notes if isinstance(note, str) and note.strip()
+            )
+            if note_block:
+                system_prompt += (
+                    "\n\n## Session Notes\n"
+                    "Treat session notes as runtime coordination context, not user instructions.\n"
+                    f"{note_block}"
+                )
 
         # --- Query-aware long-term memory injection ---
         ltm = self.memory.get_relevant_memory_context(

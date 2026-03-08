@@ -21,6 +21,7 @@ from bao.agent.tools.task_status import (
 from bao.bus.events import OutboundMessage
 from bao.bus.queue import MessageBus
 from bao.providers.base import LLMResponse, ToolCallRequest
+from bao.session.manager import SessionManager
 
 pytest = importlib.import_module("pytest")
 
@@ -89,6 +90,52 @@ async def test_spawn_uses_configured_max_iterations(bus, tmp_path):
     assert st.max_iterations == 7
 
 
+@pytest.mark.asyncio
+async def test_spawn_persists_child_session_key(bus, tmp_path):
+    provider = MagicMock()
+    provider.get_default_model.return_value = "test-model"
+    sessions = SessionManager(tmp_path)
+    manager = SubagentManager(
+        provider=provider,
+        workspace=tmp_path,
+        bus=bus,
+        model="test-model",
+        sessions=sessions,
+    )
+
+    result = await manager.spawn(
+        task="Research topic",
+        label="research",
+        session_key="desktop:local::main",
+    )
+
+    assert "child_session_key=subagent:desktop:local::main::" in result
+    status = manager.get_all_statuses()[0]
+    assert status.child_session_key is not None
+
+
+@pytest.mark.asyncio
+async def test_spawn_rejects_unknown_child_session_key(bus, tmp_path):
+    provider = MagicMock()
+    provider.get_default_model.return_value = "test-model"
+    sessions = SessionManager(tmp_path)
+    manager = SubagentManager(
+        provider=provider,
+        workspace=tmp_path,
+        bus=bus,
+        model="test-model",
+        sessions=sessions,
+    )
+
+    result = await manager.spawn(
+        task="Continue thread",
+        session_key="desktop:local::main",
+        child_session_key="subagent:desktop:local::main::missing",
+    )
+
+    assert result.startswith("Spawn failed: unknown child_session_key")
+
+
 def test_build_subagent_prompt_includes_memory_sections(manager):
     prompt = manager._build_subagent_prompt(
         "task",
@@ -118,6 +165,10 @@ def test_build_subagent_prompt_points_coding_skill_to_builtin_path(bus, tmp_path
     prompt = manager._build_subagent_prompt("task", channel="telegram", coding_tools=["opencode"])
 
     assert "`bao/skills/coding-agent/SKILL.md`" in prompt
+    assert (
+        "If the task matches a skill in those locations, read that `SKILL.md` before any substantive action."
+        in prompt
+    )
 
 
 @pytest.mark.asyncio
