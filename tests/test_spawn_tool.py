@@ -28,6 +28,7 @@ class _DummyManager:
         origin_chat_id: str = "direct",
         session_key: str | None = None,
         context_from: str | None = None,
+        child_session_key: str | None = None,
     ) -> str:
         self.calls.append(
             {
@@ -37,6 +38,7 @@ class _DummyManager:
                 "origin_chat_id": origin_chat_id,
                 "session_key": session_key,
                 "context_from": context_from,
+                "child_session_key": child_session_key,
             }
         )
         return self.result
@@ -94,6 +96,21 @@ def test_spawn_tool_notifies_zh_on_success() -> None:
         "thread_ts": "1710000.123",
         "channel_type": "channel",
     }
+
+
+@pytest.mark.asyncio
+async def test_spawn_tool_passes_child_session_key() -> None:
+    manager = _DummyManager('Spawned task_id=abc123def456 label="worker"')
+    tool = SpawnTool(manager=cast(SubagentManager, cast(object, manager)))
+    tool.set_context("desktop", "local", session_key="desktop:local::main", lang="zh")
+
+    result = await tool.execute(
+        task="continue", child_session_key="subagent:desktop:local::main::child"
+    )
+
+    assert result.startswith("Spawned task_id=abc123def456")
+    assert manager.calls[0]["session_key"] == "desktop:local::main"
+    assert manager.calls[0]["child_session_key"] == "subagent:desktop:local::main::child"
 
 
 def test_spawn_tool_notifies_en_on_success() -> None:
