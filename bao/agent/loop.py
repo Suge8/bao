@@ -4093,13 +4093,20 @@ Respond with ONLY valid JSON, no markdown fences."""
         session_key: str = "gateway:direct",
         channel: str = "gateway",
         chat_id: str = "direct",
+        media: list[str] | None = None,
         on_progress: Callable[[str], Awaitable[None]] | None = None,
         on_event: Callable[[StreamEvent], Awaitable[None]] | None = None,
         ephemeral: bool = False,
         metadata: dict[str, Any] | None = None,
     ) -> str:
         await self._connect_mcp()
-        msg = InboundMessage(channel=channel, sender_id="user", chat_id=chat_id, content=content)
+        msg = InboundMessage(
+            channel=channel,
+            sender_id="user",
+            chat_id=chat_id,
+            content=content,
+            media=list(media or []),
+        )
         if isinstance(metadata, dict):
             msg.metadata.update(dict(metadata))
         if ephemeral:
