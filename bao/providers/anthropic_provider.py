@@ -14,11 +14,10 @@ from bao.providers.retry import (
     DEFAULT_MAX_RETRIES,
     ProgressCallbackError,
     StreamInterruptedError,
-    compute_retry_delay,
     emit_progress,
     emit_progress_reset,
+    run_with_retries,
     safe_error_text,
-    should_retry_exception,
 )
 
 _MAX_RETRIES = DEFAULT_MAX_RETRIES
@@ -381,147 +380,130 @@ class AnthropicProvider(LLMProvider):
         if thinking:
             request_kwargs["thinking"] = thinking
 
-        last_err: Exception | None = None
         content = ""
-        for attempt in range(_MAX_RETRIES + 1):
-            try:
-                content = ""
-                tool_calls: list[ToolCallRequest] = []
-                reasoning_content: str | None = None
-                thinking_blocks: list[dict[str, Any]] = []
-                current_tool_id: str | None = None
-                current_tool_name: str | None = None
-                partial_json = ""
+        retry_count = 0
 
-                async with self._get_client().messages.stream(**request_kwargs) as stream:
-                    async for event in stream:
-                        if event.type == "content_block_start":
-                            if hasattr(event.content_block, "type"):
-                                if event.content_block.type == "tool_use":
-                                    current_tool_id = event.content_block.id
-                                    current_tool_name = event.content_block.name
-                                    partial_json = ""
-                        elif event.type == "content_block_delta":
-                            delta = event.delta
-                            if delta.type == "text_delta":
-                                content += delta.text
-                                await emit_progress(on_progress, delta.text)
-                            elif delta.type == "input_json_delta":
-                                partial_json += delta.partial_json
-                            elif delta.type == "thinking_delta":
-                                if reasoning_content is None:
-                                    reasoning_content = ""
-                                reasoning_content += delta.thinking
-                        elif event.type == "content_block_stop":
-                            if current_tool_id and current_tool_name:
-                                try:
-                                    args = json.loads(partial_json) if partial_json else {}
-                                except json.JSONDecodeError as exc:
-                                    raise RuntimeError("incomplete tool json in stream") from exc
-                                tool_calls.append(
-                                    ToolCallRequest(
-                                        id=current_tool_id,
-                                        name=current_tool_name,
-                                        arguments=args,
-                                    )
-                                )
-                                current_tool_id = None
-                                current_tool_name = None
+        async def _on_retry(exc: BaseException, attempt: int, delay: float) -> None:
+            nonlocal retry_count
+            retry_count = attempt + 1
+            await emit_progress_reset(on_progress)
+            logger.warning(
+                "⚠️ Anthropic 重试中 / retrying: transient error (attempt {}/{}), in {:.1f}s: {}",
+                attempt + 1,
+                _MAX_RETRIES + 1,
+                delay,
+                safe_error_text(exc),
+            )
+
+        async def _run_once() -> LLMResponse:
+            nonlocal content
+            content = ""
+            tool_calls: list[ToolCallRequest] = []
+            reasoning_content: str | None = None
+            thinking_blocks: list[dict[str, Any]] = []
+            current_tool_id: str | None = None
+            current_tool_name: str | None = None
+            partial_json = ""
+
+            async with self._get_client().messages.stream(**request_kwargs) as stream:
+                async for event in stream:
+                    if event.type == "content_block_start":
+                        if hasattr(event.content_block, "type"):
+                            if event.content_block.type == "tool_use":
+                                current_tool_id = event.content_block.id
+                                current_tool_name = event.content_block.name
                                 partial_json = ""
-
-                    final_msg = await stream.get_final_message()
-                    for block in getattr(final_msg, "content", []) or []:
-                        if getattr(block, "type", None) == "thinking":
-                            thinking_blocks.append(
-                                {
-                                    "type": "thinking",
-                                    "thinking": str(getattr(block, "thinking", "") or ""),
-                                }
+                    elif event.type == "content_block_delta":
+                        delta = event.delta
+                        if delta.type == "text_delta":
+                            content += delta.text
+                            await emit_progress(on_progress, delta.text)
+                        elif delta.type == "input_json_delta":
+                            partial_json += delta.partial_json
+                        elif delta.type == "thinking_delta":
+                            if reasoning_content is None:
+                                reasoning_content = ""
+                            reasoning_content += delta.thinking
+                    elif event.type == "content_block_stop":
+                        if current_tool_id and current_tool_name:
+                            try:
+                                args = json.loads(partial_json) if partial_json else {}
+                            except json.JSONDecodeError as exc:
+                                raise RuntimeError("incomplete tool json in stream") from exc
+                            tool_calls.append(
+                                ToolCallRequest(
+                                    id=current_tool_id,
+                                    name=current_tool_name,
+                                    arguments=args,
+                                )
                             )
+                            current_tool_id = None
+                            current_tool_name = None
+                            partial_json = ""
 
-                # Usage from final message
-                usage = {
-                    "prompt_tokens": final_msg.usage.input_tokens,
-                    "completion_tokens": final_msg.usage.output_tokens,
-                    "total_tokens": final_msg.usage.input_tokens + final_msg.usage.output_tokens,
-                }
-
-                # Map finish reason
-                stop = final_msg.stop_reason
-                if stop == "end_turn":
-                    finish_reason = "stop"
-                elif stop == "max_tokens":
-                    finish_reason = "length"
-                elif stop == "tool_use":
-                    finish_reason = "tool_calls"
-                else:
-                    finish_reason = stop or "stop"
-
-                return LLMResponse(
-                    content=content or None,
-                    tool_calls=tool_calls,
-                    finish_reason=finish_reason,
-                    usage=usage,
-                    reasoning_content=reasoning_content,
-                    thinking_blocks=thinking_blocks or None,
-                )
-            except asyncio.CancelledError:
-                raise
-            except ProgressCallbackError as exc:
-                if isinstance(exc, StreamInterruptedError):
-                    return LLMResponse(content=content or None, finish_reason="interrupted")
-                cause = exc.__cause__ or exc
-                return LLMResponse(
-                    content=f"Error calling Anthropic progress callback: {safe_error_text(cause)}",
-                    finish_reason="error",
-                )
-            except Exception as e:
-                last_err = e
-                is_retryable = should_retry_exception(e)
-
-                if is_retryable and attempt < _MAX_RETRIES:
-                    try:
-                        await emit_progress_reset(on_progress)
-                    except ProgressCallbackError as exc:
-                        if isinstance(exc, StreamInterruptedError):
-                            return LLMResponse(content=content or None, finish_reason="interrupted")
-                        cause = exc.__cause__ or exc
-                        return LLMResponse(
-                            content=(
-                                f"Error calling Anthropic progress callback: "
-                                f"{safe_error_text(cause)}"
-                            ),
-                            finish_reason="error",
+                final_msg = await stream.get_final_message()
+                for block in getattr(final_msg, "content", []) or []:
+                    if getattr(block, "type", None) == "thinking":
+                        thinking_blocks.append(
+                            {
+                                "type": "thinking",
+                                "thinking": str(getattr(block, "thinking", "") or ""),
+                            }
                         )
 
-                    delay = compute_retry_delay(e, attempt, base_delay=_BASE_DELAY)
-                    logger.warning(
-                        "⚠️ Anthropic 重试中 / retrying: transient error (attempt {}/{}), in {:.1f}s: {}",
-                        attempt + 1,
-                        _MAX_RETRIES + 1,
-                        delay,
-                        safe_error_text(e),
-                    )
-                    await asyncio.sleep(delay)
-                    continue
+            usage = {
+                "prompt_tokens": final_msg.usage.input_tokens,
+                "completion_tokens": final_msg.usage.output_tokens,
+                "total_tokens": final_msg.usage.input_tokens + final_msg.usage.output_tokens,
+            }
 
-                # Non-retryable or retries exhausted
-                if attempt > 0:
-                    logger.error(
-                        "❌ Anthropic 最终失败 / final failure: after {} attempts: {}",
-                        attempt + 1,
-                        safe_error_text(e),
-                    )
-                return LLMResponse(
-                    content=f"Error calling Anthropic: {safe_error_text(e)}",
-                    finish_reason="error",
+            stop = final_msg.stop_reason
+            if stop == "end_turn":
+                finish_reason = "stop"
+            elif stop == "max_tokens":
+                finish_reason = "length"
+            elif stop == "tool_use":
+                finish_reason = "tool_calls"
+            else:
+                finish_reason = stop or "stop"
+
+            return LLMResponse(
+                content=content or None,
+                tool_calls=tool_calls,
+                finish_reason=finish_reason,
+                usage=usage,
+                reasoning_content=reasoning_content,
+                thinking_blocks=thinking_blocks or None,
+            )
+
+        try:
+            return await run_with_retries(
+                _run_once,
+                max_retries=_MAX_RETRIES,
+                base_delay=_BASE_DELAY,
+                on_retry=_on_retry,
+            )
+        except asyncio.CancelledError:
+            raise
+        except ProgressCallbackError as exc:
+            if isinstance(exc, StreamInterruptedError):
+                return LLMResponse(content=content or None, finish_reason="interrupted")
+            cause = exc.__cause__ or exc
+            return LLMResponse(
+                content=f"Error calling Anthropic progress callback: {safe_error_text(cause)}",
+                finish_reason="error",
+            )
+        except Exception as e:
+            if retry_count > 0:
+                logger.error(
+                    "❌ Anthropic 最终失败 / final failure: after {} attempts: {}",
+                    retry_count + 1,
+                    safe_error_text(e),
                 )
-
-        # Should not reach here, but safety net
-        return LLMResponse(
-            content=f"Error calling Anthropic: {safe_error_text(last_err or RuntimeError('unknown error'))}",
-            finish_reason="error",
-        )
+            return LLMResponse(
+                content=f"Error calling Anthropic: {safe_error_text(e)}",
+                finish_reason="error",
+            )
 
     def _parse_response(self, response: Any) -> LLMResponse:
         """Parse Anthropic response into LLMResponse."""

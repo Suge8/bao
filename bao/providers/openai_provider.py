@@ -29,6 +29,7 @@ from bao.providers.retry import (
     compute_retry_delay,
     emit_progress,
     emit_progress_reset,
+    run_with_retries,
     safe_error_text,
     should_retry_exception,
 )
@@ -467,126 +468,115 @@ class OpenAICompatibleProvider(LLMProvider):
         if reasoning_effort:
             params["reasoning_effort"] = reasoning_effort
 
-        last_err: Exception | None = None
         content = ""
-        for attempt in range(_MAX_RETRIES + 1):
-            try:
-                content = ""
-                stream = await self._get_client().chat.completions.create(**params)
-                tool_calls_acc: dict[int, dict[str, Any]] = {}
-                finish_reason = "stop"
-                usage: dict[str, int] = {}
-                reasoning_content: str | None = None
+        retry_count = 0
 
-                async for chunk in stream:
-                    if not chunk.choices:
-                        if hasattr(chunk, "usage") and chunk.usage:
-                            usage = {
-                                "prompt_tokens": chunk.usage.prompt_tokens or 0,
-                                "completion_tokens": chunk.usage.completion_tokens or 0,
-                                "total_tokens": chunk.usage.total_tokens or 0,
-                            }
-                        continue
-                    delta = chunk.choices[0].delta
-                    if delta.content:
-                        content += delta.content
-                        await emit_progress(on_progress, delta.content)
-                    rc = getattr(delta, "reasoning_content", None)
-                    if rc:
-                        if reasoning_content is None:
-                            reasoning_content = ""
-                        reasoning_content += rc
-                    if delta.tool_calls:
-                        for tc in delta.tool_calls:
-                            idx = tc.index
-                            if idx not in tool_calls_acc:
-                                tool_calls_acc[idx] = {
-                                    "id": tc.id or "",
-                                    "name": tc.function.name or "",
-                                    "args": "",
-                                }
-                            if tc.function and tc.function.arguments:
-                                tool_calls_acc[idx]["args"] += tc.function.arguments
-                            if tc.id:
-                                tool_calls_acc[idx]["id"] = tc.id
-                            if tc.function and tc.function.name:
-                                tool_calls_acc[idx]["name"] = tc.function.name
-                    if chunk.choices[0].finish_reason:
-                        finish_reason = chunk.choices[0].finish_reason
+        async def _on_retry(exc: BaseException, attempt: int, delay: float) -> None:
+            nonlocal retry_count
+            retry_count = attempt + 1
+            await emit_progress_reset(on_progress)
+            logger.warning(
+                "⚠️ LLM 重试中 / retrying: transient error (attempt {}/{}), in {:.1f}s: {}",
+                attempt + 1,
+                _MAX_RETRIES + 1,
+                delay,
+                safe_error_text(exc),
+            )
 
-                import json_repair
+        async def _run_once() -> LLMResponse:
+            nonlocal content
+            content = ""
+            stream = await self._get_client().chat.completions.create(**params)
+            tool_calls_acc: dict[int, dict[str, Any]] = {}
+            finish_reason = "stop"
+            usage: dict[str, int] = {}
+            reasoning_content: str | None = None
 
-                from bao.providers.base import ToolCallRequest
-
-                parsed_tools = []
-                for idx in sorted(tool_calls_acc):
-                    tc = tool_calls_acc[idx]
-                    try:
-                        args = json_repair.loads(tc["args"]) if tc["args"] else {}
-                    except Exception as exc:
-                        raise RuntimeError("incomplete tool json in stream") from exc
-                    if not isinstance(args, dict):
-                        args = {}
-                    parsed_tools.append(
-                        ToolCallRequest(id=tc["id"], name=tc["name"], arguments=args)
-                    )
-
-                return LLMResponse(
-                    content=content or None,
-                    tool_calls=parsed_tools,
-                    finish_reason=finish_reason,
-                    usage=usage,
-                    reasoning_content=reasoning_content,
-                )
-            except asyncio.CancelledError:
-                raise
-            except ProgressCallbackError as exc:
-                if isinstance(exc, StreamInterruptedError):
-                    return LLMResponse(content=content or None, finish_reason="interrupted")
-                cause = exc.__cause__ or exc
-                return LLMResponse(
-                    content=f"Error calling LLM progress callback: {safe_error_text(cause)}",
-                    finish_reason="error",
-                )
-            except Exception as e:
-                last_err = e
-                is_retryable = should_retry_exception(e)
-                if is_retryable and attempt < _MAX_RETRIES:
-                    try:
-                        await emit_progress_reset(on_progress)
-                    except ProgressCallbackError as exc:
-                        if isinstance(exc, StreamInterruptedError):
-                            return LLMResponse(content=content or None, finish_reason="interrupted")
-                        cause = exc.__cause__ or exc
-                        return LLMResponse(
-                            content=f"Error calling LLM progress callback: {safe_error_text(cause)}",
-                            finish_reason="error",
-                        )
-
-                    delay = compute_retry_delay(e, attempt, base_delay=_BASE_DELAY)
-                    logger.warning(
-                        "⚠️ LLM 重试中 / retrying: transient error (attempt {}/{}), in {:.1f}s: {}",
-                        attempt + 1,
-                        _MAX_RETRIES + 1,
-                        delay,
-                        safe_error_text(e),
-                    )
-                    await asyncio.sleep(delay)
+            async for chunk in stream:
+                if not chunk.choices:
+                    if hasattr(chunk, "usage") and chunk.usage:
+                        usage = {
+                            "prompt_tokens": chunk.usage.prompt_tokens or 0,
+                            "completion_tokens": chunk.usage.completion_tokens or 0,
+                            "total_tokens": chunk.usage.total_tokens or 0,
+                        }
                     continue
-                if attempt > 0:
-                    logger.error(
-                        "❌ LLM 最终失败 / final failure: after {} attempts: {}",
-                        attempt + 1,
-                        safe_error_text(e),
-                    )
-                return LLMResponse(
-                    content=f"Error calling LLM: {safe_error_text(e)}",
-                    finish_reason="error",
+                delta = chunk.choices[0].delta
+                if delta.content:
+                    content += delta.content
+                    await emit_progress(on_progress, delta.content)
+                rc = getattr(delta, "reasoning_content", None)
+                if rc:
+                    if reasoning_content is None:
+                        reasoning_content = ""
+                    reasoning_content += rc
+                if delta.tool_calls:
+                    for tc in delta.tool_calls:
+                        idx = tc.index
+                        if idx not in tool_calls_acc:
+                            tool_calls_acc[idx] = {
+                                "id": tc.id or "",
+                                "name": tc.function.name or "",
+                                "args": "",
+                            }
+                        if tc.function and tc.function.arguments:
+                            tool_calls_acc[idx]["args"] += tc.function.arguments
+                        if tc.id:
+                            tool_calls_acc[idx]["id"] = tc.id
+                        if tc.function and tc.function.name:
+                            tool_calls_acc[idx]["name"] = tc.function.name
+                if chunk.choices[0].finish_reason:
+                    finish_reason = chunk.choices[0].finish_reason
+
+            import json_repair
+
+            parsed_tools = []
+            for idx in sorted(tool_calls_acc):
+                tc = tool_calls_acc[idx]
+                try:
+                    args = json_repair.loads(tc["args"]) if tc["args"] else {}
+                except Exception as exc:
+                    raise RuntimeError("incomplete tool json in stream") from exc
+                if not isinstance(args, dict):
+                    args = {}
+                parsed_tools.append(ToolCallRequest(id=tc["id"], name=tc["name"], arguments=args))
+
+            return LLMResponse(
+                content=content or None,
+                tool_calls=parsed_tools,
+                finish_reason=finish_reason,
+                usage=usage,
+                reasoning_content=reasoning_content,
+            )
+
+        try:
+            return await run_with_retries(
+                _run_once,
+                max_retries=_MAX_RETRIES,
+                base_delay=_BASE_DELAY,
+                on_retry=_on_retry,
+            )
+        except asyncio.CancelledError:
+            raise
+        except ProgressCallbackError as exc:
+            if isinstance(exc, StreamInterruptedError):
+                return LLMResponse(content=content or None, finish_reason="interrupted")
+            cause = exc.__cause__ or exc
+            return LLMResponse(
+                content=f"Error calling LLM progress callback: {safe_error_text(cause)}",
+                finish_reason="error",
+            )
+        except Exception as e:
+            if retry_count > 0:
+                logger.error(
+                    "❌ LLM 最终失败 / final failure: after {} attempts: {}",
+                    retry_count + 1,
+                    safe_error_text(e),
                 )
-        return LLMResponse(
-            content=f"Error calling LLM: {safe_error_text(last_err or RuntimeError('unknown error'))}",
-            finish_reason="error",
-        )
+            return LLMResponse(
+                content=f"Error calling LLM: {safe_error_text(e)}",
+                finish_reason="error",
+            )
 
     def _build_responses_body(
         self,
