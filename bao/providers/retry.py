@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import email.utils
+import inspect
 import time
 from collections.abc import Awaitable, Callable, Iterable
+from typing import TypeVar
 
 try:
     import httpx
@@ -43,6 +45,7 @@ MAX_RETRY_AFTER_SECONDS = 60.0
 DEFAULT_MAX_RETRIES = 2
 DEFAULT_BASE_DELAY = 1.0
 PROGRESS_RESET = "\x00"
+_T = TypeVar("_T")
 
 
 class ProgressCallbackError(RuntimeError):
@@ -216,3 +219,32 @@ async def emit_progress(
 
 async def emit_progress_reset(on_progress: Callable[[str], Awaitable[None]] | None) -> None:
     await emit_progress(on_progress, PROGRESS_RESET)
+
+
+async def run_with_retries(
+    operation: Callable[[], Awaitable[_T]],
+    *,
+    max_retries: int = DEFAULT_MAX_RETRIES,
+    base_delay: float = DEFAULT_BASE_DELAY,
+    on_retry: Callable[[BaseException, int, float], Awaitable[None] | None] | None = None,
+    should_retry: Callable[[BaseException], bool] = should_retry_exception,
+) -> _T:
+    last_exc: BaseException | None = None
+    for attempt in range(max_retries + 1):
+        try:
+            return await operation()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            last_exc = exc
+            if attempt >= max_retries or not should_retry(exc):
+                raise
+            delay = compute_retry_delay(exc, attempt, base_delay=base_delay)
+            if on_retry is not None:
+                result = on_retry(exc, attempt, delay)
+                if inspect.isawaitable(result):
+                    await result
+            await asyncio.sleep(delay)
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError("retry loop exited without result")
