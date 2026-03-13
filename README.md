@@ -3,9 +3,9 @@
 <br>
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/hero.svg" />
-  <source media="(prefers-color-scheme: light)" srcset="assets/hero.svg" />
-  <img alt="Bao" src="assets/hero.svg" width="800" />
+  <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg" />
+  <source media="(prefers-color-scheme: light)" srcset="assets/hero-light.svg" />
+  <img alt="Bao" src="assets/hero-dark.svg" width="800" />
 </picture>
 
 <br>
@@ -58,7 +58,13 @@ Bao 有闭环经验引擎。一次任务里踩过的坑，下次不会再从零�
 
 一个助手，不必被一件慢任务拖住全部交互。
 
-<p align="center"><img src="assets/features.svg" width="800" alt="核心特性"></p>
+<p align="center">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/features-dark.svg" />
+  <source media="(prefers-color-scheme: light)" srcset="assets/features-light.svg" />
+  <img alt="核心特性" src="assets/features-dark.svg" width="800" />
+</picture>
+</p>
 
 ### 💎 为什么选择 Bao
 
@@ -89,7 +95,13 @@ Bao 的核心取舍不同：**更短的上手路径 + 更强的记忆与学习�
 - OpenClaw：更广的官方控制面，适合需要完整 Gateway 架构的场景
 - Bao：更快的落地路径，更强的记忆与学习能力，适合长期陪伴型使用
 
-<p align="center"><img src="assets/architecture.svg" width="800" alt="架构"></p>
+<p align="center">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/architecture-dark.svg" />
+  <source media="(prefers-color-scheme: light)" srcset="assets/architecture-light.svg" />
+  <img alt="架构" src="assets/architecture-dark.svg" width="800" />
+</picture>
+</p>
 
 ## 🚀 快速开始
 
@@ -283,9 +295,9 @@ bao/
 <div align="center">
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/hero-en.svg" />
-  <source media="(prefers-color-scheme: light)" srcset="assets/hero-en.svg" />
-  <img alt="Bao" src="assets/hero-en.svg" width="800" />
+  <source media="(prefers-color-scheme: dark)" srcset="assets/hero-en-dark.svg" />
+  <source media="(prefers-color-scheme: light)" srcset="assets/hero-en-light.svg" />
+  <img alt="Bao" src="assets/hero-en-dark.svg" width="800" />
 </picture>
 
 <br>
@@ -336,7 +348,13 @@ Complex tasks don't block the current conversation. Bao supports parallel subage
 
 One assistant shouldn't be held hostage by one slow task.
 
-<p align="center"><img src="assets/features-en.svg" width="800" alt="Core Features"></p>
+<p align="center">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/features-en-dark.svg" />
+  <source media="(prefers-color-scheme: light)" srcset="assets/features-en-light.svg" />
+  <img alt="Core Features" src="assets/features-en-dark.svg" width="800" />
+</picture>
+</p>
 
 ### 💎 Why Choose Bao
 
@@ -367,7 +385,13 @@ Bao's core tradeoff is different: **shorter onboarding path + stronger memory an
 - OpenClaw: Broader official control surface, suitable for scenarios requiring complete Gateway architecture
 - Bao: Faster deployment path, stronger memory and learning capabilities, suitable for long-term companion use
 
-<p align="center"><img src="assets/architecture-en.svg" width="800" alt="Architecture"></p>
+<p align="center">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/architecture-en-dark.svg" />
+  <source media="(prefers-color-scheme: light)" srcset="assets/architecture-en-light.svg" />
+  <img alt="Architecture" src="assets/architecture-en-dark.svg" width="800" />
+</picture>
+</p>
 
 ### 🚀 Quick Start
 

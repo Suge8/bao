@@ -1,0 +1,153 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 480" width="100%" height="100%">
+
+  <defs>
+    <style>
+      @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+      .font-sans { font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+      .font-mono { font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace; }
+      .text-primary { fill: #09090b; }
+      .text-secondary { fill: #52525b; }
+      .text-muted { fill: #a1a1aa; }
+      .text-accent { fill: #d97706; }
+      .fw-medium { font-weight: 500; }
+      .fw-semibold { font-weight: 600; }
+      .fw-bold { font-weight: 700; }
+      .tracking-tight { letter-spacing: -0.02em; }
+      .tracking-wide { letter-spacing: 0.1em; }
+      
+      @keyframes float { 0%, 100% { transform: translateY(0px); } 50% { transform: translateY(-8px); } }
+      @keyframes float-delayed { 0%, 100% { transform: translateY(0px); } 50% { transform: translateY(-8px); } }
+      @keyframes pulse { 0%, 100% { opacity: 0.5; } 50% { opacity: 1; } }
+      @keyframes line-flow { 0% { stroke-dashoffset: 24; } 100% { stroke-dashoffset: 0; } }
+      
+      .animate-float { animation: float 6s ease-in-out infinite; }
+      .animate-float-delayed { animation: float-delayed 7s ease-in-out infinite; animation-delay: 1.5s; }
+      .animate-pulse { animation: pulse 4s ease-in-out infinite; }
+      .animate-flow { animation: line-flow 1.5s linear infinite; stroke-dasharray: 6 6; }
+    </style>
+    <linearGradient id="bg-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff" />
+      <stop offset="100%" stop-color="#f4f4f5" />
+    </linearGradient>
+    <radialGradient id="glow-grad" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="rgba(245, 158, 11, 0.08)" />
+      <stop offset="100%" stop-color="rgba(245, 158, 11, 0.08)" stop-opacity="0" />
+    </radialGradient>
+    <filter id="shadow-md" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="rgba(0, 0, 0, 0.08)" />
+    </filter>
+    <filter id="shadow-sm" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="4" stdDeviation="6" flood-color="rgba(0, 0, 0, 0.08)" />
+    </filter>
+  </defs>
+  <rect width="100%" height="480" fill="#fafafa" rx="16" />
+  <rect width="100%" height="480" fill="url(#bg-grad)" rx="16" opacity="0.6" />
+  <rect width="100%" height="480" fill="transparent" stroke="#e4e4e7" stroke-width="2" rx="16" />
+
+  
+  <circle cx="150" cy="150" r="200" fill="url(#glow-grad)" class="animate-pulse" />
+  <circle cx="650" cy="400" r="200" fill="url(#glow-grad)" class="animate-pulse" style="animation-delay: 1s;" />
+
+  <!-- Header -->
+  <g transform="translate(50, 60)">
+    <text y="0" class="font-sans fw-bold tracking-wide text-accent" font-size="12">CORE CAPABILITIES</text>
+    <text y="36" class="font-sans fw-bold tracking-tight text-primary" font-size="28">Built for long-term use, not just chat</text>
+    <text y="64" class="font-sans fw-medium text-secondary" font-size="15">From LanceDB persistence at the bottom to multi-agent collaboration at the top.</text>
+  </g>
+
+  <!-- Feature Grid -->
+  <g transform="translate(50, 160)">
+    
+    <!-- Row 1 -->
+    <g transform="translate(0, 0)">
+      <g filter="url(#shadow-sm)">
+        <rect width="220" height="120" rx="16" fill="#ffffff" stroke="#e4e4e7" />
+        <rect x="20" y="20" width="36" height="36" rx="8" fill="#fef3c7" />
+        <g transform="translate(26, 26)">
+          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#d97706" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5M3 5c0 1.66 4 3 9 3s9-1.34 9-3M3 5c0-1.66 4-3 9-3s9 1.34 9 3M3 12c0 1.66 4 3 9 3s9-1.34 9-3"/></svg>
+        </g>
+        <text x="20" y="80" class="font-sans fw-bold text-primary" font-size="15">Persistent Memory</text>
+        <text x="20" y="100" class="font-sans fw-medium text-muted" font-size="12">
+          <tspan x="20" dy="0">LanceDB vector recall</tspan>
+          <tspan x="20" dy="16">Segmented preferences</tspan>
+        </text>
+      </g>
+    </g>
+
+    <g transform="translate(240, 0)">
+      <g filter="url(#shadow-sm)" class="animate-float">
+        <rect width="220" height="120" rx="16" fill="#ffffff" stroke="#e4e4e7" />
+        <rect x="20" y="20" width="36" height="36" rx="8" fill="#d1fae5" />
+        <g transform="translate(26, 26)">
+          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/><path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/><path d="M15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4"/><path d="M17.599 6.5a3 3 0 0 0 .399-1.375"/><path d="M6.003 5.125A3 3 0 0 0 6.401 6.5"/><path d="M3.477 10.896a4 4 0 0 1 .585-.396"/><path d="M19.938 10.5a4 4 0 0 1 .585.396"/><path d="M6 18a4 4 0 0 1-1.967-.516"/><path d="M19.967 17.484A4 4 0 0 1 18 18"/></svg>
+        </g>
+        <text x="20" y="80" class="font-sans fw-bold text-primary" font-size="15">Experience Engine</text>
+        <text x="20" y="100" class="font-sans fw-medium text-muted" font-size="12">
+          <tspan x="20" dy="0">Auto-extract lessons</tspan>
+          <tspan x="20" dy="16">Strategy reuse  •  Confidence scoring</tspan>
+        </text>
+      </g>
+    </g>
+
+    <g transform="translate(480, 0)">
+      <g filter="url(#shadow-sm)">
+        <rect width="220" height="120" rx="16" fill="#ffffff" stroke="#e4e4e7" />
+        <rect x="20" y="20" width="36" height="36" rx="8" fill="#e0f2fe" />
+        <g transform="translate(26, 26)">
+          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#0ea5e9" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="14" r="8"/><path d="M12 10v4l2 2"/><path d="M10 2h4"/><path d="M12 2v2"/></svg>
+        </g>
+        <text x="20" y="80" class="font-sans fw-bold text-primary" font-size="15">Long-Run Engine</text>
+        <text x="20" y="100" class="font-sans fw-medium text-muted" font-size="12">
+          <tspan x="20" dy="0">Trajectory compression</tspan>
+          <tspan x="20" dy="16">Auto checkpoints  •  Non-blocking</tspan>
+        </text>
+      </g>
+    </g>
+
+    <!-- Row 2 -->
+    <g transform="translate(0, 140)">
+      <g filter="url(#shadow-sm)" class="animate-float-delayed">
+        <rect width="220" height="120" rx="16" fill="#ffffff" stroke="#e4e4e7" />
+        <rect x="20" y="20" width="36" height="36" rx="8" fill="#ede9fe" />
+        <g transform="translate(26, 26)">
+          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#8b5cf6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" x2="6" y1="3" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>
+        </g>
+        <text x="20" y="80" class="font-sans fw-bold text-primary" font-size="15">Parallel Subagents</text>
+        <text x="20" y="100" class="font-sans fw-medium text-muted" font-size="12">
+          <tspan x="20" dy="0">Background execution</tspan>
+          <tspan x="20" dy="16">Visible progress  •  Resumable</tspan>
+        </text>
+      </g>
+    </g>
+
+    <g transform="translate(240, 140)">
+      <g filter="url(#shadow-sm)">
+        <rect width="220" height="120" rx="16" fill="#ffffff" stroke="#e4e4e7" />
+        <rect x="20" y="20" width="36" height="36" rx="8" fill="#ffe4e6" />
+        <g transform="translate(26, 26)">
+          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#f43f5e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" x2="20" y1="19" y2="19"/></svg>
+        </g>
+        <text x="20" y="80" class="font-sans fw-bold text-primary" font-size="15">Native Coding Agent</text>
+        <text x="20" y="100" class="font-sans fw-medium text-muted" font-size="12">
+          <tspan x="20" dy="0">Codex / Claude Code ready</tspan>
+          <tspan x="20" dy="16">Auto schema routing</tspan>
+        </text>
+      </g>
+    </g>
+
+    <g transform="translate(480, 140)">
+      <g filter="url(#shadow-sm)">
+        <rect width="220" height="120" rx="16" fill="#ffffff" stroke="#e4e4e7" />
+        <rect x="20" y="20" width="36" height="36" rx="8" fill="#fef3c7" />
+        <g transform="translate(26, 26)">
+          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#d97706" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="14" x="2" y="3" rx="2"/><line x1="8" x2="16" y1="21" y2="21"/><line x1="12" x2="12" y1="17" y2="21"/></svg>
+        </g>
+        <text x="20" y="80" class="font-sans fw-bold text-primary" font-size="15">Desktop Automation</text>
+        <text x="20" y="100" class="font-sans fw-medium text-muted" font-size="12">
+          <tspan x="20" dy="0">Across 9 platforms</tspan>
+          <tspan x="20" dy="16">Screen/click native  •  Tool fusion</tspan>
+        </text>
+      </g>
+    </g>
+  </g>
+</svg>
