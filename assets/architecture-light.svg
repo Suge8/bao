@@ -1,0 +1,140 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 520" width="100%" height="100%">
+
+  <defs>
+    <style>
+      @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+      .font-sans { font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+      .font-mono { font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace; }
+      .text-primary { fill: #09090b; }
+      .text-secondary { fill: #52525b; }
+      .text-muted { fill: #a1a1aa; }
+      .text-accent { fill: #d97706; }
+      .fw-medium { font-weight: 500; }
+      .fw-semibold { font-weight: 600; }
+      .fw-bold { font-weight: 700; }
+      .tracking-tight { letter-spacing: -0.02em; }
+      .tracking-wide { letter-spacing: 0.1em; }
+      
+      @keyframes float { 0%, 100% { transform: translateY(0px); } 50% { transform: translateY(-8px); } }
+      @keyframes float-delayed { 0%, 100% { transform: translateY(0px); } 50% { transform: translateY(-8px); } }
+      @keyframes pulse { 0%, 100% { opacity: 0.5; } 50% { opacity: 1; } }
+      @keyframes line-flow { 0% { stroke-dashoffset: 24; } 100% { stroke-dashoffset: 0; } }
+      
+      .animate-float { animation: float 6s ease-in-out infinite; }
+      .animate-float-delayed { animation: float-delayed 7s ease-in-out infinite; animation-delay: 1.5s; }
+      .animate-pulse { animation: pulse 4s ease-in-out infinite; }
+      .animate-flow { animation: line-flow 1.5s linear infinite; stroke-dasharray: 6 6; }
+    </style>
+    <linearGradient id="bg-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff" />
+      <stop offset="100%" stop-color="#f4f4f5" />
+    </linearGradient>
+    <radialGradient id="glow-grad" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="rgba(245, 158, 11, 0.08)" />
+      <stop offset="100%" stop-color="rgba(245, 158, 11, 0.08)" stop-opacity="0" />
+    </radialGradient>
+    <filter id="shadow-md" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="rgba(0, 0, 0, 0.08)" />
+    </filter>
+    <filter id="shadow-sm" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="4" stdDeviation="6" flood-color="rgba(0, 0, 0, 0.08)" />
+    </filter>
+  </defs>
+  <rect width="100%" height="520" fill="#fafafa" rx="16" />
+  <rect width="100%" height="520" fill="url(#bg-grad)" rx="16" opacity="0.6" />
+  <rect width="100%" height="520" fill="transparent" stroke="#e4e4e7" stroke-width="2" rx="16" />
+
+  
+  <g transform="translate(60, 50)">
+    <text y="0" class="font-sans fw-bold tracking-wide text-accent" font-size="12">ARCHITECTURE</text>
+    <text y="32" class="font-sans fw-bold tracking-tight text-primary" font-size="24">底层数据流与模块协作架构</text>
+    <text y="56" class="font-sans fw-medium text-secondary" font-size="14">高内聚、低耦合，从交互输入到记忆更新的生命周期一致性管理。</text>
+  </g>
+
+  <!-- Left: Inputs -->
+  <g transform="translate(50, 150)">
+    <rect width="200" height="80" rx="12" fill="#ffffff" stroke="#e4e4e7" filter="url(#shadow-sm)" />
+    <rect x="0" y="24" width="4" height="32" rx="2" fill="#0ea5e9" />
+    <g transform="translate(16, 28)">
+        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#0ea5e9" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+    </g>
+    <text x="50" y="44" class="font-sans fw-bold text-primary" font-size="14">用户界面请求</text>
+    <text x="20" y="68" class="font-sans fw-medium text-muted" font-size="11">桌面应用、系统指令快捷抓取</text>
+    <path d="M200 40 L 260 40" stroke="rgba(217, 119, 6, 0.3)" stroke-width="2" class="animate-flow" />
+    <circle cx="260" cy="40" r="4" fill="#d97706" />
+  </g>
+  <g transform="translate(50, 260)">
+    <rect width="200" height="80" rx="12" fill="#ffffff" stroke="#e4e4e7" filter="url(#shadow-sm)" />
+    <rect x="0" y="24" width="4" height="32" rx="2" fill="#8b5cf6" />
+    <g transform="translate(16, 28)">
+        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#8b5cf6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+    </g>
+    <text x="50" y="44" class="font-sans fw-bold text-primary" font-size="14">第三方渠道分流</text>
+    <text x="20" y="68" class="font-sans fw-medium text-muted" font-size="11">9大主流平台消息接驳与格式化</text>
+    <path d="M200 40 L 260 40" stroke="rgba(217, 119, 6, 0.3)" stroke-width="2" class="animate-flow" />
+    <circle cx="260" cy="40" r="4" fill="#d97706" />
+  </g>
+
+  <!-- Center: Core -->
+  <g transform="translate(280, 130)" filter="url(#shadow-md)">
+    <rect width="250" height="280" rx="20" fill="#ffffff" stroke="#e4e4e7" stroke-width="2" />
+    <g transform="translate(112, 12)"><svg xmlns="http://www.w3.org/2000/svg" width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#09090b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="16" height="16" x="4" y="4" rx="2"/><rect width="6" height="6" x="9" y="9" rx="1"/><path d="M15 2v2"/><path d="M15 20v2"/><path d="M2 15h2"/><path d="M2 9h2"/><path d="M20 15h2"/><path d="M20 9h2"/><path d="M9 2v2"/><path d="M9 20v2"/></svg></g>
+    <text x="125" y="58" class="font-sans fw-bold text-primary" font-size="15" text-anchor="middle">核心运行时 AgentLoop</text>
+    
+    <g transform="translate(25, 76)">
+      <rect width="200" height="40" rx="8" fill="#ffffff" stroke="#d4d4d8" />
+      <g transform="translate(12, 10)">
+        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#d97706" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5M3 5c0 1.66 4 3 9 3s9-1.34 9-3M3 5c0-1.66 4-3 9-3s9 1.34 9 3M3 12c0 1.66 4 3 9 3s9-1.34 9-3"/></svg>
+      </g>
+      <text x="44" y="25" class="font-sans fw-semibold text-secondary" font-size="13">长期记忆 (LanceDB)</text>
+    </g>
+    <g transform="translate(25, 126)">
+      <rect width="200" height="40" rx="8" fill="#ffffff" stroke="#d4d4d8" />
+      <g transform="translate(12, 10)">
+        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/><path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/><path d="M15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4"/><path d="M17.599 6.5a3 3 0 0 0 .399-1.375"/><path d="M6.003 5.125A3 3 0 0 0 6.401 6.5"/><path d="M3.477 10.896a4 4 0 0 1 .585-.396"/><path d="M19.938 10.5a4 4 0 0 1 .585.396"/><path d="M6 18a4 4 0 0 1-1.967-.516"/><path d="M19.967 17.484A4 4 0 0 1 18 18"/></svg>
+      </g>
+      <text x="44" y="25" class="font-sans fw-semibold text-secondary" font-size="13">闭环经验反馈引擎</text>
+    </g>
+    <g transform="translate(25, 176)">
+      <rect width="200" height="40" rx="8" fill="#ffffff" stroke="#d4d4d8" />
+      <g transform="translate(12, 10)">
+        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#f43f5e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="14" r="8"/><path d="M12 10v4l2 2"/><path d="M10 2h4"/><path d="M12 2v2"/></svg>
+      </g>
+      <text x="44" y="25" class="font-sans fw-semibold text-secondary" font-size="13">任务编排/轨迹压缩</text>
+    </g>
+    <g transform="translate(25, 226)">
+      <rect width="200" height="40" rx="8" fill="#ffffff" stroke="#d4d4d8" />
+      <g transform="translate(12, 10)">
+        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#0ea5e9" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" x2="6" y1="3" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>
+      </g>
+      <text x="44" y="25" class="font-sans fw-semibold text-secondary" font-size="13">子代理调度层</text>
+    </g>
+  </g>
+
+  <!-- Right: Outputs -->
+  <g transform="translate(560, 150)">
+    <path d="M -30 40 L 0 40" stroke="rgba(217, 119, 6, 0.3)" stroke-width="2" class="animate-flow" />
+    <circle cx="-30" cy="40" r="4" fill="#d97706" />
+    <rect width="180" height="80" rx="12" fill="#ffffff" stroke="#e4e4e7" filter="url(#shadow-sm)" />
+    <rect x="176" y="24" width="4" height="32" rx="2" fill="#f43f5e" />
+    <g transform="translate(16, 28)">
+        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#f43f5e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></svg>
+    </g>
+    <text x="50" y="44" class="font-sans fw-bold text-primary" font-size="14">MCP 协议生态</text>
+    <text x="20" y="68" class="font-sans fw-medium text-muted" font-size="11">Tools, Files, Cloud</text>
+  </g>
+  <g transform="translate(560, 260)">
+    <path d="M -30 40 L 0 40" stroke="rgba(217, 119, 6, 0.3)" stroke-width="2" class="animate-flow" />
+    <circle cx="-30" cy="40" r="4" fill="#d97706" />
+    <rect width="180" height="80" rx="12" fill="#ffffff" stroke="#e4e4e7" filter="url(#shadow-sm)" />
+    <rect x="176" y="24" width="4" height="32" rx="2" fill="#d97706" />
+    <g transform="translate(16, 28)">
+        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#d97706" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="14" x="2" y="3" rx="2"/><line x1="8" x2="16" y1="21" y2="21"/><line x1="12" x2="12" y1="17" y2="21"/></svg>
+    </g>
+    <text x="50" y="44" class="font-sans fw-bold text-primary" font-size="14">桌面端自动化执行</text>
+    <text x="20" y="68" class="font-sans fw-medium text-muted" font-size="11">Screen & Controls</text>
+  </g>
+  
+  <rect x="50" y="450" width="700" height="40" rx="8" fill="#fef3c7" />
+  <text x="400" y="475" class="font-sans fw-semibold text-accent_muted" font-size="13" text-anchor="middle">Fully type-safe execution and strictly bounded contexts.</text>
+</svg>
