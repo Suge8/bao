@@ -242,21 +242,26 @@ def _make_mock_session_manager(
             "metadata": {"title": s.get("title", s["key"]), **dict(s.get("metadata", {}))},
             "message_count": s.get("message_count"),
             "has_messages": s.get("has_messages"),
+            "needs_tail_backfill": bool(s.get("needs_tail_backfill", False)),
         }
         for s in sessions
     ]
 
+    def _serialize_session(session: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "key": session["key"],
+            "updated_at": session.get("updated_at", 0),
+            "metadata": dict(session.get("metadata", {})),
+            "message_count": session.get("message_count"),
+            "has_messages": session.get("has_messages"),
+            "needs_tail_backfill": bool(session.get("needs_tail_backfill", False)),
+        }
+
+    def _find_session(key: str) -> dict[str, Any] | None:
+        return next((session for session in state_sessions if session["key"] == key), None)
+
     def _list_sessions():
-        return [
-            {
-                "key": s["key"],
-                "updated_at": s.get("updated_at", 0),
-                "metadata": dict(s.get("metadata", {})),
-                "message_count": s.get("message_count"),
-                "has_messages": s.get("has_messages"),
-            }
-            for s in state_sessions
-        ]
+        return [_serialize_session(session) for session in state_sessions]
 
     sm.list_sessions.side_effect = _list_sessions
     sm.get_active_session_key.side_effect = lambda _natural_key: state["active"]
@@ -300,7 +305,7 @@ def _make_mock_session_manager(
             updated_at.isoformat() if hasattr(updated_at, "isoformat") else str(updated_at)
         )
         metadata = dict(getattr(session, "metadata", {}))
-        existing = next((s for s in state_sessions if s["key"] == key), None)
+        existing = _find_session(key)
         if existing is None:
             state_sessions.append(
                 {
@@ -312,6 +317,18 @@ def _make_mock_session_manager(
             return
         existing["updated_at"] = updated_value
         existing["metadata"] = metadata
+        existing["needs_tail_backfill"] = bool(getattr(session, "needs_tail_backfill", False))
+
+    def _get_session_list_entry(key: str) -> dict[str, Any] | None:
+        session = _find_session(key)
+        return _serialize_session(session) if session is not None else None
+
+    def _update_session(key: str, **changes: Any) -> None:
+        session = _find_session(key)
+        if session is None:
+            raise KeyError(key)
+        for field, value in changes.items():
+            session[field] = dict(value) if field == "metadata" and isinstance(value, dict) else value
 
     sm.set_active_session_key.side_effect = _set_active
     sm.clear_active_session_key.side_effect = _clear_active
@@ -319,6 +336,7 @@ def _make_mock_session_manager(
     sm.delete_session_tree.side_effect = _delete_session
     sm.get_or_create.side_effect = _get_or_create
     sm.save.side_effect = _save
+    sm.get_session_list_entry.side_effect = _get_session_list_entry
     sm.add_change_listener.side_effect = listeners.append
 
     def _remove_change_listener(listener):
@@ -333,6 +351,7 @@ def _make_mock_session_manager(
     sm.remove_change_listener.side_effect = _remove_change_listener
     sm._listeners = listeners
     sm._emit_change = _emit_change
+    sm._update_session = _update_session
     return sm
 
 
@@ -703,6 +722,54 @@ def test_set_local_active_key_clears_unread_for_selected_session(qt_app):
         runner.shutdown(grace_s=1.0)
 
 
+def test_set_local_active_key_updates_active_projection_without_sessions_changed(qt_app):
+    runner = AsyncioRunner()
+    runner.start()
+    try:
+        svc = _new_session_service(runner)
+        svc._model.reset_sessions(
+            [
+                {
+                    "key": "desktop:local::s1",
+                    "title": "s1",
+                    "is_active": True,
+                    "updated_at": "",
+                    "channel": "desktop",
+                    "has_unread": False,
+                    "updated_label": "",
+                    "message_count": 1,
+                    "has_messages": True,
+                },
+                {
+                    "key": "desktop:local::s2",
+                    "title": "s2",
+                    "is_active": False,
+                    "updated_at": "",
+                    "channel": "desktop",
+                    "has_unread": False,
+                    "updated_label": "",
+                    "message_count": 3,
+                    "has_messages": True,
+                },
+            ],
+            "desktop:local::s1",
+        )
+
+        changed_events: list[bool] = []
+        summaries: list[tuple[str, object, object]] = []
+        svc.sessionsChanged.connect(lambda: changed_events.append(True))
+        svc.activeSummaryChanged.connect(
+            lambda key, count, has_messages: summaries.append((key, count, has_messages))
+        )
+
+        svc._set_local_active_key("desktop:local::s2")
+
+        assert changed_events == []
+        assert summaries[-1] == ("desktop:local::s2", 3, True)
+    finally:
+        runner.shutdown(grace_s=1.0)
+
+
 def test_session_change_event_ignores_after_shutdown(qt_app):
     runner = AsyncioRunner()
     runner.start()
@@ -729,8 +796,20 @@ def test_list_result_triggers_background_display_tail_backfill(qt_app):
         sm = MagicMock()
         svc._session_manager = sm
         sessions = [
-            {"key": "desktop:local::s1", "title": "One", "updated_at": 1, "channel": "desktop"},
-            {"key": "desktop:local::s2", "title": "Two", "updated_at": 2, "channel": "desktop"},
+            {
+                "key": "desktop:local::s1",
+                "title": "One",
+                "updated_at": 1,
+                "channel": "desktop",
+                "needs_tail_backfill": True,
+            },
+            {
+                "key": "desktop:local::s2",
+                "title": "Two",
+                "updated_at": 2,
+                "channel": "desktop",
+                "needs_tail_backfill": True,
+            },
         ]
 
         svc._handle_list_result(True, "", ([dict(s) for s in sessions], "desktop:local::s1"))
@@ -2685,6 +2764,249 @@ def test_external_deleted_change_event_still_refreshes_visible_session(qt_app):
         assert _sessions_model(svc).rowCount() == 1
         idx = _sessions_model(svc).index(0)
         assert _sessions_model(svc).data(idx, Qt.UserRole + 1) == "desktop:local::s1"
+    finally:
+        runner.shutdown(grace_s=1.0)
+
+
+def test_metadata_change_updates_session_without_full_refresh(qt_app):
+    runner = AsyncioRunner()
+    runner.start()
+    try:
+        svc = _new_session_service(runner)
+        sm = _make_mock_session_manager(
+            sessions=[
+                {"key": "desktop:local::s1", "title": "Chat 1", "updated_at": 10},
+                {"key": "desktop:local::s2", "title": "Chat 2", "updated_at": 9},
+            ],
+            active_key="desktop:local::s1",
+        )
+        svc.setGatewayReady()
+        svc.initialize(sm)
+        _spin_until(lambda: _sessions_model(svc).rowCount() == 2)
+
+        refresh_calls = 0
+        original_refresh = svc.refresh
+
+        def _tracked_refresh() -> None:
+            nonlocal refresh_calls
+            refresh_calls += 1
+            original_refresh()
+
+        svc.refresh = _tracked_refresh  # type: ignore[method-assign]
+        initial_list_calls = sm.list_sessions.call_count
+
+        sm._update_session(
+            "desktop:local::s2",
+            metadata={"title": "Renamed Chat 2"},
+        )
+        sm._emit_change("desktop:local::s2", "metadata")
+
+        _spin_until(
+            lambda: _sessions_model(svc).data(
+                _index_by_key(svc, "desktop:local::s2"), Qt.UserRole + 2
+            )
+            == "Renamed Chat 2"
+        )
+
+        assert refresh_calls == 0
+        assert sm.list_sessions.call_count == initial_list_calls
+        assert sm.get_session_list_entry.call_count >= 1
+    finally:
+        runner.shutdown(grace_s=1.0)
+
+
+def test_message_change_updates_session_without_full_refresh(qt_app):
+    runner = AsyncioRunner()
+    runner.start()
+    try:
+        svc = _new_session_service(runner)
+        sm = _make_mock_session_manager(
+            sessions=[
+                {"key": "desktop:local::s1", "title": "Chat 1", "updated_at": 10},
+                {"key": "desktop:local::s2", "title": "Chat 2", "updated_at": 9},
+            ],
+            active_key="desktop:local::s1",
+        )
+        svc.setGatewayReady()
+        svc.initialize(sm)
+        _spin_until(lambda: _sessions_model(svc).rowCount() == 2)
+
+        refresh_calls = 0
+        original_refresh = svc.refresh
+
+        def _tracked_refresh() -> None:
+            nonlocal refresh_calls
+            refresh_calls += 1
+            original_refresh()
+
+        svc.refresh = _tracked_refresh  # type: ignore[method-assign]
+        initial_list_calls = sm.list_sessions.call_count
+
+        sm._update_session(
+            "desktop:local::s2",
+            updated_at=20,
+            message_count=3,
+            has_messages=True,
+            metadata={
+                "title": "Chat 2",
+                "desktop_last_ai_at": "2026-03-14T10:00:00",
+                "desktop_last_seen_ai_at": "2026-03-14T09:00:00",
+            },
+        )
+        sm._emit_change("desktop:local::s2", "messages")
+
+        _spin_until(
+            lambda: _sessions_model(svc).data(_sessions_model(svc).index(0), Qt.UserRole + 1)
+            == "desktop:local::s2"
+        )
+
+        idx = _sessions_model(svc).index(0)
+        assert refresh_calls == 0
+        assert sm.list_sessions.call_count == initial_list_calls
+        assert sm.get_session_list_entry.call_count >= 1
+        assert _sessions_model(svc).data(idx, Qt.UserRole + 8) == 3
+        assert _sessions_model(svc).data(idx, Qt.UserRole + 6) is True
+    finally:
+        runner.shutdown(grace_s=1.0)
+
+
+def test_stale_incremental_session_entry_result_does_not_override_newer_state():
+    runner = AsyncioRunner()
+    runner.start()
+    try:
+        svc = _new_session_service(runner)
+        sm = _make_mock_session_manager(
+            sessions=[
+                {"key": "desktop:local::s1", "title": "Chat 1", "updated_at": 10},
+                {"key": "desktop:local::s2", "title": "Current", "updated_at": 9},
+            ],
+            active_key="desktop:local::s1",
+        )
+        svc.setGatewayReady()
+        svc.initialize(sm)
+        _spin_until(lambda: _sessions_model(svc).rowCount() == 2)
+
+        generation = svc._session_entry_generation
+        svc._session_entry_request_seq["desktop:local::s2"] = 2
+
+        svc._handle_session_entry_result(
+            True,
+            "",
+            (
+                "desktop:local::s2",
+                1,
+                generation,
+                {
+                    "key": "desktop:local::s2",
+                    "updated_at": 8,
+                    "metadata": {"title": "Stale"},
+                },
+            ),
+        )
+
+        idx = _index_by_key(svc, "desktop:local::s2")
+        assert _sessions_model(svc).data(idx, Qt.UserRole + 2) == "Current"
+
+        svc._handle_session_entry_result(
+            True,
+            "",
+            (
+                "desktop:local::s2",
+                2,
+                generation - 1,
+                {
+                    "key": "desktop:local::s2",
+                    "updated_at": 8,
+                    "metadata": {"title": "Older Generation"},
+                },
+            ),
+        )
+
+        assert _sessions_model(svc).data(idx, Qt.UserRole + 2) == "Current"
+    finally:
+        runner.shutdown(grace_s=1.0)
+
+
+def test_incremental_message_change_backfills_only_updated_session(qt_app):
+    runner = AsyncioRunner()
+    runner.start()
+    try:
+        svc = _new_session_service(runner)
+        sm = _make_mock_session_manager(
+            sessions=[
+                {
+                    "key": "desktop:local::s1",
+                    "title": "Chat 1",
+                    "updated_at": 10,
+                    "needs_tail_backfill": True,
+                },
+                {"key": "desktop:local::s2", "title": "Chat 2", "updated_at": 9},
+            ],
+            active_key="desktop:local::s1",
+        )
+        svc.setGatewayReady()
+        svc.initialize(sm)
+        _spin_until(lambda: _sessions_model(svc).rowCount() == 2)
+        sm.backfill_display_tail_rows.reset_mock()
+
+        sm._update_session(
+            "desktop:local::s2",
+            updated_at=20,
+            needs_tail_backfill=True,
+            message_count=2,
+            has_messages=True,
+            metadata={"title": "Chat 2"},
+        )
+        sm._emit_change("desktop:local::s2", "messages")
+
+        _spin_until(lambda: sm.backfill_display_tail_rows.call_count >= 1)
+
+        sm.backfill_display_tail_rows.assert_called_once_with(["desktop:local::s2"], 200)
+    finally:
+        runner.shutdown(grace_s=1.0)
+
+
+def test_incremental_message_change_uses_row_upsert_not_full_sync(qt_app):
+    runner = AsyncioRunner()
+    runner.start()
+    try:
+        svc = _new_session_service(runner)
+        sm = _make_mock_session_manager(
+            sessions=[
+                {"key": "desktop:local::s1", "title": "Chat 1", "updated_at": 10},
+                {"key": "desktop:local::s2", "title": "Chat 2", "updated_at": 9},
+            ],
+            active_key="desktop:local::s1",
+        )
+        svc.setGatewayReady()
+        svc.initialize(sm)
+        _spin_until(lambda: _sessions_model(svc).rowCount() == 2)
+
+        original_upsert = svc._model.upsert_sessions
+        upsert_calls = 0
+
+        def _tracked_upsert(sessions: list[dict[str, Any]], active_key: str) -> None:
+            nonlocal upsert_calls
+            upsert_calls += 1
+            original_upsert(sessions, active_key)
+
+        def _unexpected_sync(_sessions: list[dict[str, Any]], _active_key: str) -> None:
+            raise AssertionError("incremental path should not call sync_sessions")
+
+        svc._model.upsert_sessions = _tracked_upsert  # type: ignore[method-assign]
+        svc._model.sync_sessions = _unexpected_sync  # type: ignore[method-assign]
+
+        sm._update_session(
+            "desktop:local::s2",
+            updated_at=20,
+            message_count=1,
+            has_messages=True,
+            metadata={"title": "Chat 2"},
+        )
+        sm._emit_change("desktop:local::s2", "messages")
+
+        _spin_until(lambda: upsert_calls == 1)
+        assert upsert_calls == 1
     finally:
         runner.shutdown(grace_s=1.0)
 

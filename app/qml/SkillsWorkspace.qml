@@ -8,6 +8,7 @@ Item {
     id: root
 
     property bool active: false
+    property var skillsService: null
     property string currentMode: "installed"
     property string draftContent: ""
     property string draftSkillId: ""
@@ -19,7 +20,7 @@ Item {
     property bool installedTabHovered: false
     property bool discoverTabHovered: false
 
-    readonly property bool hasSkillsService: typeof skillsService !== "undefined" && skillsService !== null
+    readonly property bool hasSkillsService: skillsService !== null
     readonly property string effectiveUiLanguage: {
         if (typeof uiLanguage === "string" && uiLanguage !== "auto")
             return uiLanguage

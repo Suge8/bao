@@ -31,11 +31,20 @@ ApplicationWindow {
 
     property string startView: "chat"
     property string activeWorkspace: "sessions"
-    readonly property bool hasDesktopPreferences: typeof desktopPreferences !== "undefined" && desktopPreferences !== null
-    readonly property bool hasConfigService: typeof configService !== "undefined" && configService !== null
-    readonly property bool hasSessionService: typeof sessionService !== "undefined" && sessionService !== null
-    readonly property bool hasChatService: typeof chatService !== "undefined" && chatService !== null
-    readonly property bool hasDiagnosticsService: typeof diagnosticsService !== "undefined" && diagnosticsService !== null
+    readonly property bool hasAppServices: typeof appServices !== "undefined" && appServices !== null
+    readonly property var chatService: hasAppServices ? appServices.chatService : null
+    readonly property var configService: hasAppServices ? appServices.configService : null
+    readonly property var sessionService: hasAppServices ? appServices.sessionService : null
+    readonly property var diagnosticsService: hasAppServices ? appServices.diagnosticsService : null
+    readonly property var desktopPreferences: hasAppServices ? appServices.desktopPreferences : null
+    readonly property var updateService: hasAppServices ? appServices.updateService : null
+    readonly property var updateBridge: hasAppServices ? appServices.updateBridge : null
+    readonly property string systemUiLanguage: hasAppServices ? appServices.systemUiLanguage : ""
+    readonly property bool hasDesktopPreferences: desktopPreferences !== null
+    readonly property bool hasConfigService: configService !== null
+    readonly property bool hasSessionService: sessionService !== null
+    readonly property bool hasChatService: chatService !== null
+    readonly property bool hasDiagnosticsService: diagnosticsService !== null
     readonly property bool isDark: hasDesktopPreferences ? desktopPreferences.isDark : true
 
     readonly property string uiLanguage: hasDesktopPreferences ? desktopPreferences.uiLanguage : "auto"
@@ -326,15 +335,9 @@ ApplicationWindow {
     }
 
     function diagnosticsGatewayState() {
-        if (!chatService || typeof chatService.state !== "string" || !chatService.state)
+        if (!chatService || typeof chatService.gatewayState !== "string" || !chatService.gatewayState)
             return "idle"
-        if (chatService.state === "running")
-            return "running"
-        if (chatService.state === "starting")
-            return "starting"
-        if (chatService.state === "error")
-            return "error"
-        return "idle"
+        return chatService.gatewayState
     }
 
     function diagnosticsGatewayLabel() {
@@ -801,6 +804,9 @@ ApplicationWindow {
                         z: 20
                         visible: !root.setupMode
                         selectionTarget: root.sidebarSelectionTarget
+                        chatService: root.chatService
+                        sessionService: root.sessionService
+                        diagnosticsService: root.diagnosticsService
                         onSettingsRequested: root.startView = "settings"
                         onDiagnosticsRequested: diagnosticsModal.open()
                         onSectionRequested: function(section) {
@@ -903,6 +909,9 @@ ApplicationWindow {
                                         Layout.fillWidth: true
                                         Layout.fillHeight: true
                                         active: root.activeWorkspace === "sessions"
+                                        chatService: root.chatService
+                                        sessionService: root.sessionService
+                                        configService: root.configService
                                     }
 
                                     Loader {
@@ -910,7 +919,10 @@ ApplicationWindow {
                                         Layout.fillHeight: true
                                         active: root.activeWorkspace === "memory"
                                         source: "MemoryWorkspace.qml"
-                                        onLoaded: if (item) item.active = true
+                                        onLoaded: if (item) {
+                                            item.active = true
+                                            item.memoryService = root.hasAppServices ? appServices.memoryService : null
+                                        }
                                     }
 
                                     Loader {
@@ -918,7 +930,10 @@ ApplicationWindow {
                                         Layout.fillHeight: true
                                         active: root.activeWorkspace === "skills"
                                         source: "SkillsWorkspace.qml"
-                                        onLoaded: if (item) item.active = true
+                                        onLoaded: if (item) {
+                                            item.active = true
+                                            item.skillsService = root.hasAppServices ? appServices.skillsService : null
+                                        }
                                     }
 
                                     Loader {
@@ -926,7 +941,13 @@ ApplicationWindow {
                                         Layout.fillHeight: true
                                         active: root.activeWorkspace === "tools"
                                         source: "ToolsWorkspace.qml"
-                                        onLoaded: if (item) item.active = true
+                                        onLoaded: if (item) {
+                                            item.active = true
+                                            item.toolsService = root.hasAppServices ? appServices.toolsService : null
+                                            item.configService = root.configService
+                                            item.uiLanguage = root.uiLanguage
+                                            item.autoLanguage = root.autoLanguage
+                                        }
                                     }
 
                                     Loader {
@@ -937,6 +958,7 @@ ApplicationWindow {
                                         onLoaded: if (item) {
                                             item.active = true
                                             item.appRoot = root
+                                            item.cronService = root.hasAppServices ? appServices.cronService : null
                                         }
                                     }
                                 }
@@ -1050,6 +1072,10 @@ ApplicationWindow {
                                     anchors.fill: parent
                                     appRoot: root
                                     onboardingMode: root.setupMode
+                                    configService: root.configService
+                                    updateService: root.updateService
+                                    updateBridge: root.updateBridge
+                                    desktopPreferences: root.desktopPreferences
                                 }
                             }
 

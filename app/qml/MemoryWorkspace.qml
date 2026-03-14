@@ -8,6 +8,7 @@ Item {
     id: root
 
     property bool active: false
+    property var memoryService: null
     property string currentScope: "memory"
     property string experienceDeprecatedMode: "active"
     property int experienceMinQuality: 0
@@ -36,7 +37,7 @@ Item {
     readonly property string appendIconSource: "../resources/icons/vendor/iconoir/nav-arrow-up.svg"
     readonly property string deprecateIconSource: "../resources/icons/vendor/iconoir/message-alert.svg"
     readonly property string removeIconSource: "../resources/icons/vendor/iconoir/bubble-xmark.svg"
-    readonly property bool hasMemoryService: typeof memoryService !== "undefined" && memoryService !== null
+    readonly property bool hasMemoryService: memoryService !== null
     readonly property var memoryStats: hasMemoryService ? memoryService.memoryStats : ({})
     readonly property var experienceStats: hasMemoryService ? memoryService.experienceStats : ({})
     readonly property var selectedMemoryCategory: hasMemoryService ? memoryService.selectedMemoryCategory : ({})

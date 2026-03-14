@@ -8,6 +8,10 @@ Rectangle {
     color: "transparent"
 
     property var appRoot: null
+    property var configService: null
+    property var updateService: null
+    property var updateBridge: null
+    property var desktopPreferences: null
     property bool onboardingMode: false
     property bool _pendingManualUpdateCheck: false
     property string updateStateUi: updateService ? updateService.state : "idle"

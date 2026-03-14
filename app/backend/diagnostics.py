@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from pathlib import Path
+from threading import RLock
 from typing import Any, ClassVar
 
-from PySide6.QtCore import Property, QObject, QUrl, Signal, Slot
+from PySide6.QtCore import Property, QObject, Qt, QUrl, Signal, Slot
 from PySide6.QtGui import QDesktopServices
 
 from bao.runtime_diagnostics import get_runtime_diagnostics_store
@@ -16,6 +17,9 @@ class DiagnosticsService(QObject):
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._store = get_runtime_diagnostics_store()
+        self._update_lock = RLock()
+        self._refresh_queued = False
+        self._refresh_dirty = False
         self._log_file_path = ""
         self._recent_log_text = ""
         self._events: list[dict[str, Any]] = []
@@ -23,11 +27,27 @@ class DiagnosticsService(QObject):
         self._event_count = 0
         self._store.add_listener(self._on_store_change)
         _ = self.destroyed.connect(self._detach_store_listener)
-        _ = self._storeUpdated.connect(self.refresh)
+        _ = self._storeUpdated.connect(self._drain_store_updates, Qt.ConnectionType.QueuedConnection)
         self.refresh()
 
     def _on_store_change(self) -> None:
+        with self._update_lock:
+            self._refresh_dirty = True
+            if self._refresh_queued:
+                return
+            self._refresh_queued = True
         self._storeUpdated.emit()
+
+    @Slot()
+    def _drain_store_updates(self) -> None:
+        while True:
+            with self._update_lock:
+                self._refresh_dirty = False
+            self.refresh()
+            with self._update_lock:
+                if not self._refresh_dirty:
+                    self._refresh_queued = False
+                    return
 
     def _detach_store_listener(self, *_args: object) -> None:
         self._store.remove_listener(self._on_store_change)
