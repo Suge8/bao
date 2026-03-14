@@ -6,6 +6,21 @@ The format follows [Keep a Changelog](https://keepachangelog.com/), and this pro
 
 ## [Unreleased]
 
+## [0.3.27] - 2026-03-14
+
+### Changed
+
+- **Desktop 会话、侧边栏与工具工作台现在统一消费单一路径读模型** — `session_projection`、`session.state`、`tool_catalog` 与 `capability registry` 收口了运行态、未读、父子会话、工具筛选与选中态，QML 只消费投影结果，不再各自推导第二套状态。
+- **浏览器自动化发行链路改为托管 runtime 单一路径** — Desktop 打包、CI Lite 与 Release workflow 现在都会先 provision 并校验 `app/resources/runtime/browser`，缺少托管 runtime 时直接失败，不再生成带空壳浏览器能力的构建。
+- **Agent 主循环与子代理协作改为结构化控制面** — `ControlEvent`、run artifact、tool exposure snapshot、结构化 tool result 与 shared run controller 现在统一承载中断、收口、归档与观测，不再借道聊天时间线传递内部控制语义。
+- **Coding agent 会话续接与远程使用说明已收口到 Bao 会话自身** — Codex / Claude Code / OpenCode 的续接状态现在按 Bao 会话 + backend 持久化到 session metadata，Bao 重启后仍可尝试复用同一外部 coding session。
+- **长期记忆改为分类事实行写模型 + 混合检索读模型** — 记忆写入、聚合向量、查询 embedding 复用、低信息 query 门控与多因子 rerank 现在走同一条路径，减少 recall 漂移与无效检索。
+
+### Fixed
+
+- **Desktop 运行态与贴底行为进一步稳定** — active session、history loading、startup greeting、diagnostics tail 与 settings/service 注入现在都走更明确的边界，减少 reload、切会话和首击时的状态漂移。
+- **工具与渠道边界错误改为明确可判定的结构化结果** — 软中断、参数校验、tool-not-found、Mochat fallback worker、iMessage/Email 生命周期与 browser fallback 现在都走更稳定的错误/完成语义，便于主代理和测试统一消费。
+
 ## [0.3.26] - 2026-03-13
 
 ### Changed
