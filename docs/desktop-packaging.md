@@ -52,6 +52,19 @@ PySide6 = Essentials + Addons。Addons 含 WebEngine（50-120MB）、3D、Multim
 
 PyInstaller 主链统一从 `dist-pyinstaller/` 输出，再由共用封装脚本优先探测 `dist-pyinstaller/dist/Bao.app` / `dist-pyinstaller\dist\Bao`；只有显式切到备用链，或主链产物不存在时，才 fallback 到 Nuitka 产物。
 
+桌面运行时的 QML/静态资源现在也收口为单一路径：
+
+- 打包前先用 `stage_desktop_resources.py` 生成干净的 staged `app/resources`
+- 再用 `app/scripts/build_qml_rcc.py` 把 `app/qml + staged resources` 编成单个二进制 `desktop_qml.rcc`
+- 桌面启动时优先注册这份 `.rcc`，直接加载 `qrc:/app/qml/Main.qml`
+- 开发态才回退本地文件系统 QML；frozen 打包态若 `.rcc` 缺失或注册失败，会直接报错退出，避免静默退回旧路径
+
+这样做的目的不是“多一层缓存”，而是把打包态的 QML 入口、图标、字体、SVG、runtime 资源统一成单个资源包事实源，减少文件系统散读和 PyInstaller 带来的路径分叉。
+
+`qmlcachegen` 目前不作为默认路径。经验上，直接对完整资源目录附带 qmlcache bytecode 很容易把 `.rcc` 包体抬得过大；因此现在只有在显式设置 `BAO_DESKTOP_WITH_QML_CACHE=1` 时，打包脚本才会给 `build_qml_rcc.py` 追加 `--with-qml-cache`，平时默认只构建资源化 `.rcc`。
+
+PyInstaller 脚本也不再把原始 `app/qml/` 目录额外塞进产物，打包态只认 `.rcc` 这一条 QML 入口，避免“`.rcc` 失效但本地 QML 还在，包照样能跑”的双路径掩盖问题。
+
 ### 3. stdlib 排除
 
 显式排除运行时不需要的标准库：tkinter、unittest、doctest、idlelib、lib2to3、ensurepip、distutils、turtledemo、test。

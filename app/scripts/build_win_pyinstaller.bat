@@ -68,6 +68,16 @@ if errorlevel 1 (
     exit /b 1
 )
 
+echo [INFO] Building desktop QML resource bundle ...
+set "QML_RCC_ARGS="
+if "%BAO_DESKTOP_WITH_QML_CACHE%"=="1" set "QML_RCC_ARGS=--with-qml-cache"
+uv run python app\scripts\build_qml_rcc.py --qml-root "%PROJECT_ROOT%\app\qml" --resources-root "%STAGED_RESOURCES_DIR%" --output-rcc "%STAGED_RESOURCES_DIR%\desktop_qml.rcc" %QML_RCC_ARGS%
+if errorlevel 1 (
+    echo [ERROR] Failed to build desktop QML resource bundle.
+    popd
+    exit /b 1
+)
+
 uv run pyinstaller ^
     --noconfirm ^
     --clean ^
@@ -77,7 +87,6 @@ uv run pyinstaller ^
     --workpath "%WORK_DIR%" ^
     --specpath "%SPEC_DIR%" ^
     --icon "%PROJECT_ROOT%\app\resources\logo.ico" ^
-    --add-data "%PROJECT_ROOT%\app\qml;app\qml" ^
     --add-data "%STAGED_RESOURCES_DIR%;app\resources" ^
     --add-data "%PROJECT_ROOT%\assets;assets" ^
     --add-data "%PROJECT_ROOT%\bao\skills;bao\skills" ^
