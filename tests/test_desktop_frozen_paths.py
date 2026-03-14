@@ -36,6 +36,23 @@ def test_resolve_qml_path_prefers_pyinstaller_meipass_layout(monkeypatch, tmp_pa
     assert main.resolve_qml_path(None) == qml_path.resolve()
 
 
+def test_resolve_qml_url_prefers_registered_resource_bundle(monkeypatch) -> None:
+    main = _main_module()
+
+    monkeypatch.setattr(main, "register_qml_resource_bundle", lambda: True)
+
+    assert main.resolve_qml_url(None).toString() == "qrc:/app/qml/Main.qml"
+
+
+def test_resolve_qml_url_requires_resource_bundle_in_frozen_build(monkeypatch) -> None:
+    main = _main_module()
+
+    monkeypatch.setattr(main, "register_qml_resource_bundle", lambda: False)
+    monkeypatch.setattr(main.sys, "frozen", True, raising=False)
+
+    assert not main.resolve_qml_url(None).isValid()
+
+
 def test_resolve_app_resource_path_supports_pyinstaller_windows_layout(
     monkeypatch, tmp_path: Path
 ) -> None:

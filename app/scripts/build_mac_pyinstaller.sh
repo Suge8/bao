@@ -103,6 +103,17 @@ mkdir -p "$DIST_DIR" "$WORK_DIR" "$SPEC_DIR" "$STAGED_RESOURCES_DIR"
 echo "▸ Staging desktop resources..."
 uv run python app/scripts/stage_desktop_resources.py --destination "$STAGED_RESOURCES_DIR"
 
+echo "▸ Building desktop QML resource bundle..."
+QML_RCC_ARGS=()
+if [[ "${BAO_DESKTOP_WITH_QML_CACHE:-0}" == "1" ]]; then
+    QML_RCC_ARGS+=(--with-qml-cache)
+fi
+uv run python app/scripts/build_qml_rcc.py \
+    --qml-root "$PROJECT_ROOT/app/qml" \
+    --resources-root "$STAGED_RESOURCES_DIR" \
+    --output-rcc "$STAGED_RESOURCES_DIR/desktop_qml.rcc" \
+    "${QML_RCC_ARGS[@]}"
+
 START_TS=$(python3 -c 'import time; print(int(time.time()))')
 
 echo "▸ Building with PyInstaller onedir..."
@@ -119,7 +130,6 @@ uv run pyinstaller \
     --target-architecture "$ARCH" \
     --osx-bundle-identifier "$BUNDLE_IDENTIFIER" \
     --icon "$PROJECT_ROOT/assets/logo.icns" \
-    --add-data "$PROJECT_ROOT/app/qml:app/qml" \
     --add-data "$STAGED_RESOURCES_DIR:app/resources" \
     --add-data "$PROJECT_ROOT/assets:assets" \
     --add-data "$PROJECT_ROOT/bao/skills:bao/skills" \
