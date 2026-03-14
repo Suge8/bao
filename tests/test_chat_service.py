@@ -1134,18 +1134,17 @@ def test_send_result_marks_seen_for_active_session():
     svc._handle_send_result(row, True, "ok")
 
     assert svc._active_send_future is None
-    sm.mark_desktop_seen_ai.assert_called_once_with(
+    sm.mark_desktop_turn_completed.assert_called_once_with(
         "desktop:active",
         emit_change=True,
         metadata_updates=None,
-        clear_running=True,
     )
-    assert sm.method_calls[-1] == call.mark_desktop_seen_ai(
+    assert sm.method_calls[-1] == call.mark_desktop_turn_completed(
         "desktop:active",
         emit_change=True,
         metadata_updates=None,
-        clear_running=True,
     )
+    sm.mark_desktop_seen_ai.assert_not_called()
     sm.set_session_running.assert_not_called()
     sm.update_metadata_only.assert_not_called()
 

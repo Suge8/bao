@@ -145,3 +145,14 @@ def test_chat_view_composer_uses_capped_radius_and_clipping() -> None:
     assert "border.color: chipHover.containsMouse ? accent : borderSubtle" in text
     assert "add: Transition" in text
     assert 'border.color: root.hasDraftAttachments ? accent : "transparent"' in text
+
+
+def test_chat_view_reconcile_queue_uses_single_pending_request() -> None:
+    text = (QML_DIR / "ChatView.qml").read_text(encoding="utf-8")
+
+    assert "property var pendingPinnedReconcile: null" in text
+    assert "reconcileQueued" not in text
+    assert "queuedReconcileAnimated" not in text
+    assert "pendingPinnedReconcile = { animated: animated !== false }" in text
+    assert "var request = messageList.pendingPinnedReconcile" in text
+    assert "messageList.pendingPinnedReconcile = null" in text

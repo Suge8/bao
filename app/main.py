@@ -608,6 +608,7 @@ def main() -> int:
 
     import importlib
 
+    from app.backend.app_services import AppServices
     from app.backend.asyncio_runner import AsyncioRunner
     from app.backend.chat import ChatMessageModel
     from app.backend.config import ConfigService
@@ -754,19 +755,22 @@ def main() -> int:
     _ = update_service.quitRequested.connect(app.quit)
 
     context = engine.rootContext()
-    context.setContextProperty("chatService", chat_service)
-    context.setContextProperty("configService", config_service)
-    context.setContextProperty("sessionService", session_service)
-    context.setContextProperty("cronService", cron_service)
-    context.setContextProperty("memoryService", memory_service)
-    context.setContextProperty("skillsService", skills_service)
-    context.setContextProperty("toolsService", tools_service)
-    context.setContextProperty("updateService", update_service)
-    context.setContextProperty("diagnosticsService", diagnostics_service)
-    context.setContextProperty("updateBridge", update_bridge)
-    context.setContextProperty("desktopPreferences", desktop_preferences)
-    context.setContextProperty("messagesModel", messages_model)
-    context.setContextProperty("systemUiLanguage", system_ui_language)
+    app_services = AppServices(
+        chat_service=chat_service,
+        config_service=config_service,
+        session_service=session_service,
+        cron_service=cron_service,
+        memory_service=memory_service,
+        skills_service=skills_service,
+        tools_service=tools_service,
+        update_service=update_service,
+        diagnostics_service=diagnostics_service,
+        update_bridge=update_bridge,
+        desktop_preferences=desktop_preferences,
+        messages_model=messages_model,
+        system_ui_language=system_ui_language,
+    )
+    context.setContextProperty("appServices", app_services)
 
     engine.load(str(qml_path))
     if not engine.rootObjects():

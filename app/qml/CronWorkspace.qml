@@ -8,7 +8,8 @@ Item {
 
     property bool active: false
     property var appRoot: null
-    readonly property bool hasCronService: typeof cronService !== "undefined" && cronService !== null
+    property var cronService: null
+    readonly property bool hasCronService: cronService !== null
     readonly property var draft: hasCronService ? cronService.draft : ({})
     readonly property var selectedTask: hasCronService ? cronService.selectedTask : ({})
     readonly property bool hasDraft: hasCronService ? cronService.hasDraft : false

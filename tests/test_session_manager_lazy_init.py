@@ -474,6 +474,48 @@ def test_list_sessions_exposes_message_summary_from_display_tail(tmp_path: Path)
     assert sessions[full_key]["has_messages"] is True
 
 
+def test_list_sessions_batches_display_tail_read_model(tmp_path: Path) -> None:
+    from bao.session.manager import SessionManager
+
+    sm = SessionManager(tmp_path)
+    for idx in range(2):
+        key = f"desktop:local::batched-{idx}"
+        session = sm.get_or_create(key)
+        session.add_message("assistant", f"hello-{idx}")
+        sm.save(session)
+        sm.invalidate(key)
+
+    with patch.object(
+        sm,
+        "_read_display_tail_row",
+        side_effect=AssertionError("list_sessions should use batched tail read model"),
+    ):
+        sessions = {item["key"]: item for item in sm.list_sessions()}
+
+    assert sessions["desktop:local::batched-0"]["message_count"] == 1
+    assert sessions["desktop:local::batched-1"]["message_count"] == 1
+
+
+def test_list_sessions_marks_missing_display_tail_for_backfill(tmp_path: Path) -> None:
+    from bao.session.manager import SessionManager
+
+    sm = SessionManager(tmp_path)
+    key = "desktop:local::needs-backfill"
+
+    session = sm.get_or_create(key)
+    session.add_message("assistant", "hello")
+    sm.save(session)
+
+    sm._delete_display_tail_row(key)
+    sm.invalidate(key)
+
+    sessions = {item["key"]: item for item in sm.list_sessions()}
+
+    assert sessions[key]["message_count"] is None
+    assert sessions[key]["has_messages"] is None
+    assert sessions[key]["needs_tail_backfill"] is True
+
+
 def test_failed_save_does_not_leak_uncommitted_tail_snapshot(tmp_path: Path) -> None:
     from bao.session.manager import SessionManager
 
@@ -591,8 +633,19 @@ def test_noop_save_skips_tail_rewrite_and_emits_no_change(tmp_path: Path) -> Non
     sm.save(session)
     events.clear()
 
+    meta_tbl = sm._meta_table()
     msg_tbl = sm._msg_table()
     with (
+        patch.object(
+            meta_tbl,
+            "delete",
+            side_effect=AssertionError("noop should not rewrite meta"),
+        ),
+        patch.object(
+            meta_tbl,
+            "add",
+            side_effect=AssertionError("noop should not rewrite meta"),
+        ),
         patch.object(
             sm,
             "_write_display_tail_row",
@@ -906,6 +959,23 @@ def test_mark_desktop_seen_ai_emits_single_metadata_change(tmp_path: Path) -> No
     sm.mark_desktop_seen_ai(key, clear_running=True)
 
     assert events == [(key, "metadata")]
+
+
+def test_mark_desktop_turn_completed_clears_running_and_marks_seen(tmp_path: Path) -> None:
+    from bao.session.manager import SessionManager
+
+    sm = SessionManager(tmp_path)
+    key = "imessage:+8618127419003::s7"
+    session = sm.get_or_create(key)
+    session.add_message("assistant", "hello")
+    sm.save(session)
+    sm.set_session_running(key, True, emit_change=False)
+
+    sm.mark_desktop_turn_completed(key, emit_change=False)
+
+    listed = {item["key"]: item for item in sm.list_sessions()}
+    assert listed[key]["metadata"].get("session_running") is None
+    assert isinstance(listed[key]["metadata"].get("desktop_last_seen_ai_at"), str)
 
 
 def test_mark_desktop_seen_ai_if_active_ignores_inactive_session(tmp_path: Path) -> None:

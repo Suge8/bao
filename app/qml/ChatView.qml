@@ -7,6 +7,9 @@ Rectangle {
     id: root
     color: "transparent"
 
+    property var chatService: null
+    property var sessionService: null
+    property var configService: null
     readonly property int composerMinHeight: 44
     readonly property int composerMaxHeight: 140
     readonly property int composerScrollInset: 12
@@ -20,7 +23,7 @@ Rectangle {
     readonly property int composerDockGap: windowContentInsetBottom
     readonly property int composerEdgeInset: spacingSm
     readonly property bool hasDraftAttachments: chatService ? chatService.draftAttachmentCount > 0 : false
-    readonly property bool hasSessionService: typeof sessionService !== "undefined" && sessionService !== null
+    readonly property bool hasSessionService: sessionService !== null
     readonly property bool activeSessionReadOnly: hasSessionService ? sessionService.activeSessionReadOnly : false
     signal messageCopied()
 
@@ -60,8 +63,8 @@ Rectangle {
             if (!chatService) return "idle"
             var phase = chatService.viewPhase
             if (phase !== undefined && phase !== null && phase !== "") return phase
-            if (chatService.state === "error") return "error"
-            if (chatService.historyLoading || chatService.state === "starting") return "loading"
+            if (chatService.gatewayState === "error") return "error"
+            if (chatService.historyLoading || chatService.gatewayState === "starting") return "loading"
             if (chatService.activeSessionReady) return "ready"
             return "idle"
         }
@@ -75,8 +78,7 @@ Rectangle {
         property bool pendingRestorePinned: false
         property bool bottomPinned: true
         property int suppressViewportTracking: 0
-        property bool reconcileQueued: false
-        property bool queuedReconcileAnimated: true
+        property var pendingPinnedReconcile: null
         property bool programmaticFollowActive: false
 
         function positionAfterLayout() {
@@ -191,20 +193,23 @@ Rectangle {
         }
 
         function queuePinnedReconcile(animated) {
-            if (reconcileQueued) {
-                queuedReconcileAnimated = queuedReconcileAnimated && animated !== false
+            if (pendingPinnedReconcile !== null) {
+                pendingPinnedReconcile = {
+                    animated: Boolean(pendingPinnedReconcile.animated) && animated !== false
+                }
                 return
             }
-            reconcileQueued = true
-            queuedReconcileAnimated = animated !== false
+            pendingPinnedReconcile = { animated: animated !== false }
             scheduleQueuedReconcile()
         }
 
         function scheduleQueuedReconcile() {
             Qt.callLater(function() {
-                var useAnimation = messageList.queuedReconcileAnimated
-                messageList.reconcileQueued = false
-                messageList.queuedReconcileAnimated = true
+                var request = messageList.pendingPinnedReconcile
+                if (request === null)
+                    return
+                var useAnimation = request.animated !== false
+                messageList.pendingPinnedReconcile = null
                 messageList.reconcilePinnedBottom(useAnimation)
             })
         }
@@ -216,8 +221,7 @@ Rectangle {
         function forceFollowToEnd(animated) {
             bottomPinned = true
             if (animated === false) {
-                reconcileQueued = false
-                queuedReconcileAnimated = true
+                pendingPinnedReconcile = null
                 reconcilePinnedBottom(false)
                 return
             }
@@ -489,7 +493,7 @@ Rectangle {
 
                 Text {
                     anchors.horizontalCenter: parent.horizontalCenter
-                    text: chatService && chatService.state === "starting"
+                    text: chatService && chatService.gatewayState === "starting"
                           ? strings.empty_starting_hint
                           : strings.chat_loading_history
                     color: textTertiary
@@ -634,7 +638,7 @@ Rectangle {
                     }
                     Text {
                         anchors.horizontalCenter: parent.horizontalCenter
-                        text: chatService && chatService.state === "running"
+                        text: chatService && chatService.gatewayState === "running"
                               ? strings.empty_chat_hint
                               : strings.empty_chat_idle_hint
                         color: textTertiary
@@ -689,7 +693,7 @@ Rectangle {
     Item {
         id: composerBar
         objectName: "composerBar"
-        readonly property bool active: chatService && chatService.state === "running" && !root.activeSessionReadOnly
+        readonly property bool active: chatService && chatService.gatewayState === "running" && !root.activeSessionReadOnly
         readonly property real visibleHeight: composerContent.implicitHeight + 20
         readonly property int revealDuration: motionPanel + 40
         // targetListBottomInset is the layout fact; presentedListBottomInset is the animated projection.
@@ -1113,7 +1117,7 @@ Rectangle {
                         anchors.verticalCenter: parent.verticalCenter
                         property bool canSend: (messageInput.text.trim().length > 0 || root.hasDraftAttachments)
                                               && chatService
-                                              && chatService.state === "running"
+                                              && chatService.gatewayState === "running"
                         color: sendHover.containsMouse && canSend
                                ? accentHover
                                : (canSend ? accent : chatComposerSendDisabled)

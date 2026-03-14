@@ -128,44 +128,33 @@ def test_sidebar_group_running_dot_avoids_parent_visible_animation_binding() -> 
 def test_sidebar_guards_injected_services_at_root() -> None:
     text = _read_qml("Sidebar.qml")
 
-    assert (
-        'readonly property bool hasChatService: typeof chatService !== "undefined" && chatService !== null'
-        in text
-    )
-    assert (
-        'readonly property bool hasSessionService: typeof sessionService !== "undefined" && sessionService !== null'
-        in text
-    )
-    assert (
-        'readonly property bool hasDiagnosticsService: typeof diagnosticsService !== "undefined" && diagnosticsService !== null'
-        in text
-    )
-    assert 'property string currentState: hasChatService ? chatService.state : "idle"' in text
-    assert 'property bool isRunning: hasChatService && chatService.state === "running"' in text
-    assert 'property bool isStarting: hasChatService && chatService.state === "starting"' in text
-    assert 'property bool isError: hasChatService && chatService.state === "error"' in text
+    assert "property var chatService: null" in text
+    assert "property var sessionService: null" in text
+    assert "property var diagnosticsService: null" in text
+    assert "readonly property bool hasChatService: chatService !== null" in text
+    assert "readonly property bool hasSessionService: sessionService !== null" in text
+    assert "readonly property bool hasDiagnosticsService: diagnosticsService !== null" in text
+    assert 'property string currentState: hasChatService ? chatService.gatewayState : "idle"' in text
+    assert 'property bool isRunning: hasChatService && chatService.gatewayState === "running"' in text
+    assert 'property bool isStarting: hasChatService && chatService.gatewayState === "starting"' in text
+    assert 'property bool isError: hasChatService && chatService.gatewayState === "error"' in text
 
 
 def test_main_guards_injected_services_at_root() -> None:
     text = _read_qml("Main.qml")
 
     assert (
-        'readonly property bool hasDesktopPreferences: typeof desktopPreferences !== "undefined" && desktopPreferences !== null'
+        'readonly property bool hasAppServices: typeof appServices !== "undefined" && appServices !== null'
         in text
     )
     assert (
-        'readonly property bool hasConfigService: typeof configService !== "undefined" && configService !== null'
+        'readonly property var desktopPreferences: hasAppServices ? appServices.desktopPreferences : null'
         in text
     )
+    assert 'readonly property var configService: hasAppServices ? appServices.configService : null' in text
+    assert 'readonly property var sessionService: hasAppServices ? appServices.sessionService : null' in text
+    assert 'readonly property var chatService: hasAppServices ? appServices.chatService : null' in text
     assert (
-        'readonly property bool hasSessionService: typeof sessionService !== "undefined" && sessionService !== null'
-        in text
-    )
-    assert (
-        'readonly property bool hasChatService: typeof chatService !== "undefined" && chatService !== null'
-        in text
-    )
-    assert (
-        'readonly property bool hasDiagnosticsService: typeof diagnosticsService !== "undefined" && diagnosticsService !== null'
+        'readonly property var diagnosticsService: hasAppServices ? appServices.diagnosticsService : null'
         in text
     )

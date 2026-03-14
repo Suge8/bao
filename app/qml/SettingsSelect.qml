@@ -5,6 +5,9 @@ import QtQuick.Layouts 1.15
 Item {
     id: root
 
+    readonly property var configService: (typeof appServices !== "undefined" && appServices !== null)
+                                      ? appServices.configService
+                                      : null
     property string label: ""
     property string dotpath: ""
     property string description: ""

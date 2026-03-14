@@ -6,6 +6,9 @@ Rectangle {
     id: root
     objectName: "sidebarRoot"
 
+    property var chatService: null
+    property var sessionService: null
+    property var diagnosticsService: null
     property string selectionTarget: "sessions"
     readonly property bool settingsActive: selectionTarget === "settings"
     signal settingsRequested()
@@ -17,9 +20,9 @@ Rectangle {
 
     color: "transparent"
 
-    readonly property bool hasChatService: typeof chatService !== "undefined" && chatService !== null
-    readonly property bool hasSessionService: typeof sessionService !== "undefined" && sessionService !== null
-    readonly property bool hasDiagnosticsService: typeof diagnosticsService !== "undefined" && diagnosticsService !== null
+    readonly property bool hasChatService: chatService !== null
+    readonly property bool hasSessionService: sessionService !== null
+    readonly property bool hasDiagnosticsService: diagnosticsService !== null
     readonly property bool hasDiagnosticsCount: hasDiagnosticsService && typeof diagnosticsService.eventCount !== "undefined"
     readonly property bool uiIsDark: isDark
     readonly property color uiBgCanvas: "transparent"
@@ -199,10 +202,10 @@ Rectangle {
             radius: height / 2
             visible: hasChatService
 
-            property string currentState: hasChatService ? chatService.state : "idle"
-            property bool isRunning: hasChatService && chatService.state === "running"
-            property bool isStarting: hasChatService && chatService.state === "starting"
-            property bool isError: hasChatService && chatService.state === "error"
+            property string currentState: hasChatService ? chatService.gatewayState : "idle"
+            property bool isRunning: hasChatService && chatService.gatewayState === "running"
+            property bool isStarting: hasChatService && chatService.gatewayState === "starting"
+            property bool isError: hasChatService && chatService.gatewayState === "error"
             property bool isIdleVisual: !isRunning && !isStarting && !isError
             property string previousState: currentState
             property bool isHovered: gwHover.containsMouse

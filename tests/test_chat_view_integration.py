@@ -37,6 +37,7 @@ QQmlApplicationEngine = QtQml.QQmlApplicationEngine
 QQuickStyle = QtQuickControls2.QQuickStyle
 QTest = QtTest.QTest
 
+from app.backend.app_services import AppServices
 from app.backend.cron import CronTasksModel
 from app.main import WindowFocusDismissFilter
 
@@ -1104,6 +1105,9 @@ def _load_main_window(
     diagnostics_service = diagnostics_service or QObject()
     cron_service = cron_service or DummyCronService()
     desktop_preferences = desktop_preferences or DummyDesktopPreferences()
+    memory_service = QObject()
+    skills_service = QObject()
+    tools_service = QObject()
     engine = QQmlApplicationEngine()
     engine._test_refs = {
         "messages_model": messages_model,
@@ -1115,18 +1119,29 @@ def _load_main_window(
         "diagnostics_service": diagnostics_service,
         "cron_service": cron_service,
         "desktop_preferences": desktop_preferences,
+        "memory_service": memory_service,
+        "skills_service": skills_service,
+        "tools_service": tools_service,
+        "app_services": None,
     }
     context = engine.rootContext()
-    context.setContextProperty("chatService", chat_service)
-    context.setContextProperty("configService", config_service)
-    context.setContextProperty("sessionService", session_service)
-    context.setContextProperty("cronService", cron_service)
-    context.setContextProperty("updateService", update_service)
-    context.setContextProperty("updateBridge", update_bridge)
-    context.setContextProperty("diagnosticsService", diagnostics_service)
-    context.setContextProperty("desktopPreferences", desktop_preferences)
-    context.setContextProperty("messagesModel", messages_model)
-    context.setContextProperty("systemUiLanguage", "en")
+    app_services = AppServices(
+        chat_service=chat_service,
+        config_service=config_service,
+        session_service=session_service,
+        cron_service=cron_service,
+        memory_service=memory_service,
+        skills_service=skills_service,
+        tools_service=tools_service,
+        update_service=update_service,
+        diagnostics_service=diagnostics_service,
+        update_bridge=update_bridge,
+        desktop_preferences=desktop_preferences,
+        messages_model=messages_model,
+        system_ui_language="en",
+    )
+    engine._test_refs["app_services"] = app_services
+    context.setContextProperty("appServices", app_services)
     engine.load(QUrl.fromLocalFile(str(MAIN_QML_PATH)))
     root_objects = engine.rootObjects()
     assert root_objects
@@ -1159,8 +1174,26 @@ def _load_inline_qml(
     source: str, *, config_service: QObject | None = None
 ) -> tuple[QQmlApplicationEngine, QObject]:
     engine = QQmlApplicationEngine()
+    engine._test_refs = {}
     context = engine.rootContext()
-    context.setContextProperty("configService", config_service or DummyConfigService())
+    dummy_config = config_service or DummyConfigService()
+    app_services = AppServices(
+        chat_service=DummyChatService(EmptyMessagesModel()),
+        config_service=dummy_config,
+        session_service=DummySessionService(EmptyMessagesModel()),
+        cron_service=DummyCronService(),
+        memory_service=QObject(),
+        skills_service=QObject(),
+        tools_service=QObject(),
+        update_service=DummyUpdateService(),
+        diagnostics_service=DummyDiagnosticsService(),
+        update_bridge=DummyUpdateBridge(),
+        desktop_preferences=DummyDesktopPreferences(),
+        messages_model=EmptyMessagesModel(),
+        system_ui_language="en",
+    )
+    engine._test_refs["app_services"] = app_services
+    context.setContextProperty("appServices", app_services)
     context.setContextProperty("sizeDropdownMaxHeight", 280)
     context.setContextProperty("spacingSm", 8)
     context.setContextProperty("textSecondary", "#666666")

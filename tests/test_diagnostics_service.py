@@ -83,3 +83,39 @@ def test_diagnostics_service_omits_empty_assistant_prompt(qt_app) -> None:
     service = DiagnosticsService()
 
     assert service.buildAssistantPrompt() == ""
+
+
+def test_diagnostics_service_coalesces_burst_store_updates(qt_app) -> None:
+    from app.backend.diagnostics import DiagnosticsService
+
+    store = get_runtime_diagnostics_store()
+    store.clear()
+
+    service = DiagnosticsService()
+    changed_calls = 0
+
+    def _count_changed() -> None:
+        nonlocal changed_calls
+        changed_calls += 1
+
+    _ = service.changed.connect(_count_changed)
+    qt_app.processEvents()
+    changed_calls = 0
+
+    store.append_log_line("2026-03-07 10:00:00 | INFO | boot")
+    store.record_event(
+        source="provider",
+        stage="chat",
+        message="model timeout",
+        code="provider_error",
+        retryable=True,
+    )
+    store.set_tool_observability({"tool_calls_total": 5, "tool_calls_error": 2})
+
+    assert changed_calls == 0
+
+    qt_app.processEvents()
+
+    assert changed_calls == 1
+    assert service.eventCount == 1
+    assert "boot" in service.recentLogText

@@ -216,6 +216,10 @@ class ChatService(QObject):
     def state(self) -> str:
         return self._state
 
+    @Property(str, notify=stateChanged)
+    def gatewayState(self) -> str:
+        return self._project_gateway_state()
+
     @Property(str, notify=errorChanged)
     def lastError(self) -> str:
         return self._last_error
@@ -1838,6 +1842,15 @@ class ChatService(QObject):
         self._gateway_channels = channels
         self.gatewayChannelsChanged.emit()
 
+    def _project_gateway_state(self) -> str:
+        if self._state == "running":
+            return "running"
+        if self._state == "starting":
+            return "starting"
+        if self._state == "error":
+            return "error"
+        return "idle"
+
     def _update_session_metadata(
         self,
         key: str,
@@ -1891,12 +1904,9 @@ class ChatService(QObject):
         if not ordered:
             return []
 
-        if self._state in ("idle", "stopped", "error"):
+        default_state = self._project_gateway_state()
+        if default_state == "error":
             default_state = "idle"
-        elif self._state == "starting":
-            default_state = "starting"
-        else:
-            default_state = "running"
 
         projection: list[dict[str, Any]] = []
         for channel in ordered:
@@ -1925,8 +1935,16 @@ class ChatService(QObject):
 
         session_manager = self._session_manager
         mark_seen_fn = getattr(session_manager, "mark_desktop_seen_ai", None)
+        mark_completed_fn = getattr(session_manager, "mark_desktop_turn_completed", None)
 
         def _apply_seen_update() -> None:
+            if clear_running and callable(mark_completed_fn):
+                mark_completed_fn(
+                    key,
+                    emit_change=emit_change,
+                    metadata_updates=metadata_updates or None,
+                )
+                return
             if not callable(mark_seen_fn):
                 return
             mark_seen_fn(

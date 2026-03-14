@@ -5,7 +5,10 @@ Item {
     id: root
 
     property bool active: false
-    readonly property bool hasSessionService: typeof sessionService !== "undefined" && sessionService !== null
+    property var chatService: null
+    property var sessionService: null
+    property var configService: null
+    readonly property bool hasSessionService: sessionService !== null
     property real railOpacity: 1.0
     property real railShift: 0.0
     property real railScale: 1.0
@@ -77,6 +80,8 @@ Item {
             SessionBrowser {
                 id: browser
                 anchors.fill: parent
+                chatService: root.chatService
+                sessionService: root.sessionService
                 activeSessionKey: root.hasSessionService ? sessionService.activeKey : ""
                 showSelection: true
                 onNewSessionRequested: root.createSession()
@@ -108,6 +113,9 @@ Item {
 
                 ChatView {
                     anchors.fill: parent
+                    chatService: root.chatService
+                    sessionService: root.sessionService
+                    configService: root.configService
                     onMessageCopied: globalToast.show(strings.copied_ok, true)
                 }
             }

@@ -10,7 +10,6 @@ import asyncio
 import os
 from collections.abc import Coroutine
 from concurrent.futures import CancelledError as FutureCancelledError
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -27,8 +26,30 @@ from PySide6.QtCore import (
     Slot,
 )
 
+from app.backend import session_projection
 from app.backend.asyncio_runner import AsyncioRunner
+from app.backend.session_projection import (
+    ActiveSessionProjection,
+    build_session_item,
+    build_sidebar_projection,
+    filter_session_dicts,
+    normalize_session_item,
+    normalize_session_items,
+    pick_latest_key,
+    project_active_session,
+    project_session_item,
+    running_parent_keys,
+    session_channel_key,
+    session_sort_value,
+    tail_backfill_keys,
+    title_by_key,
+    visible_session_key,
+    visible_session_key_for_channel,
+)
 from bao.session.manager import SessionChangeEvent
+
+_format_display_title = session_projection.format_display_title
+_format_updated_label = session_projection.format_updated_label
 
 _DEBUG_SWITCH = os.getenv("BAO_DESKTOP_DEBUG_SWITCH") == "1"
 _ROLE_BASE = int(Qt.ItemDataRole.UserRole)
@@ -90,176 +111,22 @@ _SIDEBAR_FIELD_TO_ROLE = {
     "is_first_in_group": _SIDEBAR_ROLE_IS_FIRST_IN_GROUP,
 }
 
-
-def _format_display_title(key: str, title: Any, *, natural_key: str = "desktop:local") -> str:
-    if isinstance(title, str):
-        cleaned = title.strip()
-        if cleaned:
-            return cleaned
-
-    if key == natural_key:
-        return "default"
-
-    if "::" in key:
-        _prefix, _sep, suffix = key.partition("::")
-        if suffix:
-            return suffix
-
-    return key
-
-
-def _session_family_key(key: str) -> str:
-    if "::" in key:
-        prefix, _sep, _suffix = key.partition("::")
-        return prefix
-    return key
-
-
-def _session_channel_key(key: str) -> str:
-    family = _session_family_key(key)
-    if ":" in family:
-        prefix, _sep, _rest = family.partition(":")
-        return prefix or "other"
-    return family if family == "heartbeat" else "other"
-
-
-def _parse_updated_at(value: Any) -> datetime | None:
-    if isinstance(value, (int, float)):
-        raw = float(value)
-        if raw <= 0:
-            return None
-        if raw > 10_000_000_000:
-            raw /= 1000.0
-        try:
-            return datetime.fromtimestamp(raw)
-        except (OverflowError, OSError, ValueError):
-            return None
-    if isinstance(value, str):
-        raw = value.strip()
-        if not raw:
-            return None
-        if raw.isdigit():
-            return _parse_updated_at(int(raw))
-        try:
-            return datetime.fromisoformat(raw.replace("Z", "+00:00"))
-        except ValueError:
-            return None
-    return None
-
-
-def _format_updated_label(updated: Any) -> str:
-    dt = _parse_updated_at(updated)
-    if dt is None:
-        return ""
-
-    now = datetime.now(tz=dt.tzinfo)
-    seconds = max(0, int((now - dt).total_seconds()))
-    if seconds < 60:
-        return "<1m"
-    if seconds < 3600:
-        return f"{seconds // 60}m"
-    if seconds < 86400:
-        return f"{seconds // 3600}h"
-    if seconds < 604800:
-        return f"{seconds // 86400}d"
-    if dt.year == now.year:
-        return f"{dt.month}/{dt.day}"
-    return f"{dt.year}/{dt.month}/{dt.day}"
-
-
-def _build_session_item(
-    key: str,
-    *,
-    natural_key: str,
-    updated_at: Any = "",
-    channel: str = "desktop",
-    has_unread: bool = False,
-    title: Any = None,
-    message_count: Any = None,
-    has_messages: Any = None,
-    session_kind: str = "regular",
-    read_only: bool = False,
-    parent_session_key: str = "",
-    parent_title: str = "",
-    child_status: str = "",
-    is_running: bool = False,
-) -> dict[str, Any]:
-    normalized_count = (
-        message_count if isinstance(message_count, int) and message_count >= 0 else None
-    )
-    normalized_has_messages = (
-        has_messages
-        if isinstance(has_messages, bool)
-        else (normalized_count > 0 if normalized_count is not None else None)
-    )
-    return {
-        "key": key,
-        "title": _format_display_title(key, title, natural_key=natural_key),
-        "updated_at": updated_at,
-        "updated_label": _format_updated_label(updated_at),
-        "channel": channel,
-        "has_unread": has_unread,
-        "message_count": normalized_count,
-        "has_messages": normalized_has_messages,
-        "session_kind": session_kind,
-        "is_read_only": read_only,
-        "parent_session_key": parent_session_key,
-        "parent_title": parent_title,
-        "child_status": child_status,
-        "is_running": is_running,
-    }
-
-
-def _filter_session_dicts(raw_sessions: list[Any]) -> list[dict[str, Any]]:
-    return [item for item in raw_sessions if isinstance(item, dict)]
-
-
-def _visible_session_key(
-    candidates: tuple[str, ...],
-    *,
-    available_keys: set[str],
-    pending_create_keys: set[str],
-) -> str:
-    for candidate in candidates:
-        if candidate and (candidate in pending_create_keys or candidate in available_keys):
-            return candidate
-    return ""
-
-
-def _visible_session_key_for_channel(
-    candidates: tuple[str, ...],
-    *,
-    available_keys: set[str],
-    pending_create_keys: set[str],
-    channel: str,
-) -> str:
-    for candidate in candidates:
-        if not candidate:
-            continue
-        if candidate not in pending_create_keys and candidate not in available_keys:
-            continue
-        if _session_channel_key(candidate) != channel:
-            continue
-        return candidate
-    return ""
-
-
-def _sidebar_channel_sort_key(channel: str) -> tuple[int, str]:
-    if channel == "desktop":
-        return (0, channel)
-    if channel == "heartbeat":
-        return (2, channel)
-    return (1, channel)
-
-
-def _visible_sidebar_items(
-    items: list[dict[str, Any]], *, expanded: bool, active_key: str
-) -> list[dict[str, Any]]:
-    if expanded:
-        return items
-    if not active_key:
-        return []
-    return [item for item in items if str(item.get("key", "")) == active_key]
+_SESSION_FIELD_TO_ROLE = {
+    "key": _ROLE_KEY,
+    "title": _ROLE_TITLE,
+    "updated_at": _ROLE_UPDATED_AT,
+    "channel": _ROLE_CHANNEL,
+    "has_unread": _ROLE_HAS_UNREAD,
+    "updated_label": _ROLE_UPDATED_LABEL,
+    "message_count": _ROLE_MESSAGE_COUNT,
+    "has_messages": _ROLE_HAS_MESSAGES,
+    "session_kind": _ROLE_SESSION_KIND,
+    "is_read_only": _ROLE_IS_READ_ONLY,
+    "parent_session_key": _ROLE_PARENT_SESSION_KEY,
+    "parent_title": _ROLE_PARENT_TITLE,
+    "child_status": _ROLE_CHILD_STATUS,
+    "is_running": _ROLE_IS_RUNNING,
+}
 
 
 class SidebarRowsModel(QAbstractListModel):
@@ -495,22 +362,147 @@ class SessionListModel(QAbstractListModel):
         active_key: str,
     ) -> None:
         self.beginResetModel()
-        self._sessions = sessions
+        self._sessions = [dict(session) for session in sessions]
         self._active_key = active_key
         self.endResetModel()
 
-    def set_active(self, key: str) -> None:
-        if self._active_key == key:
+    def sync_sessions(
+        self,
+        sessions: list[dict[str, Any]],
+        active_key: str,
+    ) -> None:
+        next_sessions = [dict(session) for session in sessions]
+        next_keys = {str(session.get("key", "")) for session in next_sessions}
+        for remove_index in range(len(self._sessions) - 1, -1, -1):
+            if str(self._sessions[remove_index].get("key", "")) in next_keys:
+                continue
+            self.beginRemoveRows(QModelIndex(), remove_index, remove_index)
+            del self._sessions[remove_index]
+            self.endRemoveRows()
+
+        row_index = 0
+        while row_index < len(next_sessions):
+            next_session = next_sessions[row_index]
+            next_key = str(next_session.get("key", ""))
+            if (
+                row_index < len(self._sessions)
+                and str(self._sessions[row_index].get("key", "")) == next_key
+            ):
+                self._update_session_row(row_index, next_session)
+                row_index += 1
+                continue
+
+            found_index = -1
+            for search_index in range(row_index + 1, len(self._sessions)):
+                if str(self._sessions[search_index].get("key", "")) == next_key:
+                    found_index = search_index
+                    break
+            if found_index >= 0:
+                self.beginMoveRows(
+                    QModelIndex(), found_index, found_index, QModelIndex(), row_index
+                )
+                session = self._sessions.pop(found_index)
+                self._sessions.insert(row_index, session)
+                self.endMoveRows()
+            else:
+                self.beginInsertRows(QModelIndex(), row_index, row_index)
+                self._sessions.insert(row_index, dict(next_session))
+                self.endInsertRows()
+            self._update_session_row(row_index, next_session)
+            row_index += 1
+
+        self._apply_active_key(active_key)
+
+    def _update_session_row(self, index: int, next_session: dict[str, Any]) -> None:
+        current = self._sessions[index]
+        changed_roles: list[int] = []
+        for field, role in _SESSION_FIELD_TO_ROLE.items():
+            next_value = next_session.get(field)
+            if current.get(field) == next_value:
+                continue
+            current[field] = next_value
+            changed_roles.append(role)
+        for field in ("self_running", "needs_tail_backfill"):
+            current[field] = next_session.get(field)
+        if not changed_roles:
             return
+        model_index = self.index(index)
+        self.dataChanged.emit(model_index, model_index, changed_roles)
+
+    def _find_session_index(self, key: str) -> int:
+        for index, session in enumerate(self._sessions):
+            if str(session.get("key", "")) == key:
+                return index
+        return -1
+
+    def _target_index_for_session(self, next_session: dict[str, Any], *, skip_index: int = -1) -> int:
+        next_sort = session_sort_value(next_session)
+        target_index = 0
+        for index, session in enumerate(self._sessions):
+            if index == skip_index:
+                continue
+            if session_sort_value(session) >= next_sort:
+                target_index += 1
+                continue
+            break
+        return target_index
+
+    def upsert_sessions(
+        self,
+        sessions: list[dict[str, Any]],
+        active_key: str,
+    ) -> None:
+        for next_session in sessions:
+            next_key = str(next_session.get("key", ""))
+            if not next_key:
+                continue
+            existing_index = self._find_session_index(next_key)
+            if existing_index < 0:
+                target_index = self._target_index_for_session(next_session)
+                self.beginInsertRows(QModelIndex(), target_index, target_index)
+                self._sessions.insert(target_index, dict(next_session))
+                self.endInsertRows()
+                self._update_session_row(target_index, next_session)
+                continue
+
+            self._update_session_row(existing_index, next_session)
+            target_index = self._target_index_for_session(next_session, skip_index=existing_index)
+            if target_index == existing_index:
+                continue
+            destination = target_index if target_index < existing_index else target_index + 1
+            self.beginMoveRows(
+                QModelIndex(),
+                existing_index,
+                existing_index,
+                QModelIndex(),
+                destination,
+            )
+            session = self._sessions.pop(existing_index)
+            insert_index = target_index if target_index < existing_index else target_index
+            self._sessions.insert(insert_index, session)
+            self.endMoveRows()
+
+        self._apply_active_key(active_key)
+
+    def _apply_active_key(self, key: str) -> None:
         old_key = self._active_key
         self._active_key = key
-        for i, s in enumerate(self._sessions):
-            session_key = s.get("key")
-            if session_key == key and s.get("has_unread"):
-                s["has_unread"] = False
-            if session_key in (old_key, key):
-                idx = self.index(i)
-                self.dataChanged.emit(idx, idx, [_ROLE_IS_ACTIVE, _ROLE_HAS_UNREAD])
+        affected_keys = {old_key, key}
+        for index, session in enumerate(self._sessions):
+            session_key = str(session.get("key", ""))
+            changed_roles: list[int] = []
+            if session_key == key and session.get("has_unread"):
+                session["has_unread"] = False
+                changed_roles.append(_ROLE_HAS_UNREAD)
+            if session_key in affected_keys:
+                changed_roles.append(_ROLE_IS_ACTIVE)
+            if not changed_roles:
+                continue
+            model_index = self.index(index)
+            self.dataChanged.emit(model_index, model_index, changed_roles)
+
+    def set_active(self, key: str) -> None:
+        self._apply_active_key(key)
 
 
 class SessionService(QObject):
@@ -534,6 +526,7 @@ class SessionService(QObject):
     _createResult = Signal(bool, str, str)  # ok, error, key
     _deleteResult = Signal(str, bool, str)
     _sessionChange = Signal(object)
+    _sessionEntryResult = Signal(bool, str, object)  # ok, error, (key, seq, generation, session_entry)
 
     def __init__(self, runner: AsyncioRunner, parent: Any = None) -> None:
         super().__init__(parent)
@@ -559,8 +552,16 @@ class SessionService(QObject):
         self._list_inflight_count = 0
         self._sessions_loading = False
         self._active_commit_seq = 0
+        self._session_entry_generation = 0
+        self._session_entry_request_seq: dict[str, int] = {}
         self._disposed = False
         self._active_session_read_only = False
+        self._active_session_projection = ActiveSessionProjection(
+            key="",
+            message_count=None,
+            has_messages=None,
+            read_only=False,
+        )
 
         self._bootstrapResult.connect(self._handle_bootstrap_result)
         self._listResult.connect(self._handle_list_result)
@@ -568,6 +569,7 @@ class SessionService(QObject):
         self._createResult.connect(self._handle_create_result)
         self._deleteResult.connect(self._handle_delete_result)
         self._sessionChange.connect(self._handle_session_change)
+        self._sessionEntryResult.connect(self._handle_session_entry_result)
 
     @Property(QObject, constant=True)
     def sessionsModel(self) -> SessionListModel:
@@ -627,12 +629,13 @@ class SessionService(QObject):
         self._pending_select_key = None
         self._pending_deletes.clear()
         self._pending_creates.clear()
+        self._session_entry_request_seq.clear()
         self._list_inflight_count = 0
         self._set_sessions_loading(False)
         self._sidebar_expanded_groups = {}
         self._sidebar_model.clear_rows()
         self._set_sidebar_unread_summary(0, "")
-        self._refresh_active_session_meta("")
+        self._set_active_session_projection("")
         self._detach_session_manager(self._session_manager)
         self._session_manager = None
 
@@ -722,45 +725,80 @@ class SessionService(QObject):
             self.activeKeyChanged.emit(new_key)
             self._emit_active_ready_if_applicable(new_key)
 
-    def _active_summary(self, key: str) -> tuple[int | None, bool | None]:
+    def _session_item_by_key(self, key: str) -> dict[str, Any] | None:
         if not key:
-            return None, None
+            return None
         for session in self._model._sessions:
-            if str(session.get("key", "")) != key:
-                continue
-            message_count = session.get("message_count")
-            has_messages = session.get("has_messages")
-            return (
-                message_count if isinstance(message_count, int) and message_count >= 0 else None,
-                has_messages if isinstance(has_messages, bool) else None,
-            )
-        return None, None
+            if str(session.get("key", "")) == key:
+                return session
+        return None
 
-    def _refresh_active_session_meta(self, key: str) -> None:
-        read_only = False
-        for session in self._model._sessions:
-            session_key = str(session.get("key", ""))
-            if session_key == key:
-                read_only = bool(session.get("is_read_only", False))
-                break
-        if self._active_session_read_only == read_only:
+    def _set_active_session_projection(self, key: str) -> None:
+        projection = project_active_session(self._model._sessions, key)
+        self._active_session_projection = projection
+        if self._active_session_read_only == projection.read_only:
             return
-        self._active_session_read_only = read_only
+        self._active_session_read_only = projection.read_only
         self.activeSessionMetaChanged.emit()
 
     def _is_read_only_session(self, key: str) -> bool:
-        if not key:
-            return False
-        for session in self._model._sessions:
-            if str(session.get("key", "")) != key:
-                continue
-            return bool(session.get("is_read_only", False))
-        return False
+        session = self._session_item_by_key(key)
+        return bool(session.get("is_read_only", False)) if session is not None else False
 
     def _emit_active_summary(self, key: str) -> None:
-        message_count, has_messages = self._active_summary(key)
-        self.activeSummaryChanged.emit(key, message_count, has_messages)
-        self._refresh_active_session_meta(key)
+        self._set_active_session_projection(key)
+        projection = self._active_session_projection
+        self.activeSummaryChanged.emit(key, projection.message_count, projection.has_messages)
+
+    def _rebuild_sidebar_projection(self, channels: set[str] | None = None) -> None:
+        self.sidebarProjectionWillChange.emit()
+        projection = build_sidebar_projection(
+            self._model._sessions,
+            active_key=self._active_key,
+            expanded_groups=self._sidebar_expanded_groups,
+            current_rows=self._sidebar_model._rows,
+            channels=channels,
+        )
+        self._sidebar_expanded_groups = projection.expanded_groups
+        self._sidebar_model.sync_rows(projection.rows)
+        self._set_sidebar_unread_summary(
+            projection.unread_count,
+            projection.unread_fingerprint,
+        )
+        self.sidebarProjectionChanged.emit()
+
+    def _apply_session_view(
+        self,
+        sessions: list[dict[str, Any]],
+        active_for_view: str,
+        *,
+        sidebar_channels: set[str] | None = None,
+        backfill_keys: list[str] | None = None,
+    ) -> None:
+        self._commit_session_view(
+            sessions,
+            active_for_view,
+            model_apply=self._model.sync_sessions,
+            sidebar_channels=sidebar_channels,
+            backfill_keys=backfill_keys,
+            derive_backfill_keys=backfill_keys is None,
+        )
+
+    def _apply_incremental_session_updates(
+        self,
+        sessions: list[dict[str, Any]],
+        active_for_view: str,
+        *,
+        sidebar_channels: set[str] | None = None,
+        backfill_keys: list[str] | None = None,
+    ) -> None:
+        self._commit_session_view(
+            sessions,
+            active_for_view,
+            model_apply=self._model.upsert_sessions,
+            sidebar_channels=sidebar_channels,
+            backfill_keys=backfill_keys,
+        )
 
     def _set_sessions_loading(self, loading: bool) -> None:
         if self._sessions_loading == loading:
@@ -784,231 +822,101 @@ class SessionService(QObject):
         self._sidebar_unread_count = unread_count
         self._sidebar_unread_fingerprint = unread_fingerprint
 
-    def _initial_sidebar_group_expanded(
-        self,
-        channel: str,
-        items: list[dict[str, Any]],
-        active_key: str,
-    ) -> bool:
-        if active_key and any(str(item.get("key", "")) == active_key for item in items):
-            return True
-        if active_key:
-            return False
-        return channel == "desktop"
+    @staticmethod
+    def _with_active_session_read(
+        sessions: list[dict[str, Any]],
+        active_for_view: str,
+    ) -> list[dict[str, Any]]:
+        next_sessions = [dict(item) for item in sessions]
+        for item in next_sessions:
+            if str(item.get("key", "")) == active_for_view:
+                item["has_unread"] = False
+        return next_sessions
 
-    def _pin_sidebar_active_row(self, rows: list[dict[str, Any]]) -> None:
-        active_key = self._active_key
-        if not active_key:
+    def _schedule_tail_backfill(self, backfill_keys: list[str]) -> None:
+        if not backfill_keys:
             return
-        current_active_index = self._sidebar_model.active_row_index(active_key)
-        if current_active_index < 0:
-            return
-        current_rows = self._sidebar_model._rows
-        if current_active_index >= len(current_rows):
-            return
-        current_active_row = current_rows[current_active_index]
-        active_channel = str(current_active_row.get("channel", "") or "")
-        if not active_channel:
-            return
-        session_slot = 0
-        for index in range(current_active_index - 1, -1, -1):
-            row = current_rows[index]
-            row_channel = str(row.get("channel", "") or "")
-            if row_channel != active_channel:
-                continue
-            if bool(row.get("is_header", False)):
-                break
-            session_slot += 1
-        next_active_index = -1
-        for idx, row in enumerate(rows):
-            if str(row.get("item_key", "")) != active_key:
-                continue
-            next_active_index = idx
-            break
-        if next_active_index < 0 or next_active_index == current_active_index:
-            return
-        pinned_row = rows.pop(next_active_index)
-        header_index = -1
-        session_count = 0
-        for idx, row in enumerate(rows):
-            row_channel = str(row.get("channel", "") or "")
-            if row_channel != active_channel:
-                continue
-            if bool(row.get("is_header", False)):
-                header_index = idx
-                continue
-            if header_index >= 0:
-                session_count += 1
-        if header_index < 0:
-            rows.insert(max(0, min(current_active_index, len(rows))), pinned_row)
-            return
-        target_index = header_index + 1 + min(session_slot, session_count)
-        rows.insert(target_index, pinned_row)
-
-    def _rebuild_sidebar_projection(self) -> None:
-        self.sidebarProjectionWillChange.emit()
-        groups: dict[str, list[dict[str, Any]]] = {}
-        order: list[str] = []
-        unread_fingerprint_parts: list[str] = []
-        active_key = self._active_key
-        available_channels: set[str] = set()
-
-        for session in self._model._sessions:
-            key = str(session.get("key", ""))
-            title = str(session.get("title", "") or key)
-            channel = str(session.get("channel", "other") or "other")
-            has_unread = bool(session.get("has_unread", False)) and key != active_key
-            updated_text = str(session.get("updated_label", "") or "")
-            session_kind = str(session.get("session_kind", "regular") or "regular")
-            is_read_only = bool(session.get("is_read_only", False))
-            parent_session_key = str(session.get("parent_session_key", "") or "")
-            is_running = bool(session.get("is_running", False))
-            visual_channel = "subagent" if session_kind == "subagent_child" else channel
-            if channel not in groups:
-                groups[channel] = []
-                order.append(channel)
-            groups[channel].append(
-                {
-                    "key": key,
-                    "title": title,
-                    "channel": channel,
-                    "visual_channel": visual_channel,
-                    "has_unread": has_unread,
-                    "updated_text": updated_text,
-                    "is_read_only": is_read_only,
-                    "is_running": is_running,
-                    "parent_session_key": parent_session_key,
-                    "is_child_session": session_kind == "subagent_child",
-                }
-            )
-            available_channels.add(channel)
-            if has_unread:
-                unread_fingerprint_parts.append(key)
-
-        self._sidebar_expanded_groups = {
-            channel: expanded
-            for channel, expanded in self._sidebar_expanded_groups.items()
-            if channel in available_channels
-        }
-        order.sort(key=_sidebar_channel_sort_key)
-        for channel in order:
-            if channel in self._sidebar_expanded_groups:
-                continue
-            self._sidebar_expanded_groups[channel] = self._initial_sidebar_group_expanded(
-                channel,
-                groups[channel],
-                active_key,
-            )
-
-        rows: list[dict[str, Any]] = []
-        for channel in order:
-            items = groups[channel]
-            expanded = self._sidebar_expanded_groups.get(channel, False) is True
-            child_buckets: dict[str, list[dict[str, Any]]] = {}
-            child_remainder: list[dict[str, Any]] = []
-            reordered_items: list[dict[str, Any]] = []
-            for item in items:
-                if bool(item.get("is_child_session", False)) and str(
-                    item.get("parent_session_key", "")
-                ):
-                    parent_key = str(item.get("parent_session_key", ""))
-                    child_buckets.setdefault(parent_key, []).append(item)
-                elif bool(item.get("is_child_session", False)):
-                    child_remainder.append(item)
-            for item in items:
-                if bool(item.get("is_child_session", False)):
-                    continue
-                reordered_items.append(item)
-                reordered_items.extend(child_buckets.get(str(item.get("key", "")), []))
-            reordered_items.extend(child_remainder)
-
-            unread_in_group = sum(
-                1 for item in reordered_items if bool(item.get("has_unread", False))
-            )
-            group_has_running = any(bool(item.get("is_running", False)) for item in reordered_items)
-            rows.append(
-                {
-                    "row_id": f"header:{channel}",
-                    "is_header": True,
-                    "channel": channel,
-                    "expanded": expanded,
-                    "item_key": "",
-                    "item_title": "",
-                    "item_updated_text": "",
-                    "visual_channel": channel,
-                    "is_read_only": False,
-                    "is_running": False,
-                    "is_child_session": False,
-                    "parent_session_key": "",
-                    "item_has_unread": False,
-                    "item_count": len(reordered_items),
-                    "group_unread_count": unread_in_group,
-                    "group_has_running": group_has_running,
-                    "is_last_in_group": False,
-                    "is_first_in_group": False,
-                }
-            )
-            visible_items = _visible_sidebar_items(
-                reordered_items,
-                expanded=expanded,
-                active_key=active_key,
-            )
-            for index, item in enumerate(visible_items):
-                rows.append(
-                    {
-                        "row_id": f"session:{item.get('key', '')}",
-                        "is_header": False,
-                        "channel": channel,
-                        "expanded": False,
-                        "item_key": str(item.get("key", "")),
-                        "item_title": str(item.get("title", "") or item.get("key", "")),
-                        "item_updated_text": str(item.get("updated_text", "") or ""),
-                        "visual_channel": str(item.get("visual_channel", channel) or channel),
-                        "is_read_only": bool(item.get("is_read_only", False)),
-                        "is_running": bool(item.get("is_running", False)),
-                        "is_child_session": bool(item.get("is_child_session", False)),
-                        "parent_session_key": str(item.get("parent_session_key", "") or ""),
-                        "item_has_unread": bool(item.get("has_unread", False)),
-                        "item_count": 0,
-                        "group_unread_count": 0,
-                        "group_has_running": False,
-                        "is_last_in_group": index == len(visible_items) - 1,
-                        "is_first_in_group": index == 0,
-                    }
-                )
-
-        self._pin_sidebar_active_row(rows)
-        unread_fingerprint_parts.sort()
-        self._sidebar_model.sync_rows(rows)
-        self._set_sidebar_unread_summary(
-            len(unread_fingerprint_parts),
-            "|".join(unread_fingerprint_parts),
+        fut = self._submit_safe(
+            self._backfill_listed_session_tails(list(dict.fromkeys(backfill_keys)))
         )
-        self.sidebarProjectionChanged.emit()
+        if fut is not None:
+            fut.add_done_callback(self._on_backfill_done)
+
+    def _commit_session_view(
+        self,
+        sessions: list[dict[str, Any]],
+        active_for_view: str,
+        *,
+        model_apply: Any,
+        sidebar_channels: set[str] | None = None,
+        backfill_keys: list[str] | None = None,
+        derive_backfill_keys: bool = False,
+        emit_sessions_changed: bool = True,
+    ) -> None:
+        next_sessions = self._with_active_session_read(sessions, active_for_view)
+        model_apply(next_sessions, active_for_view)
+        self._commit_active_view(
+            active_for_view,
+            sidebar_channels=sidebar_channels,
+            emit_sessions_changed=emit_sessions_changed,
+        )
+        target_backfill_keys = (
+            tail_backfill_keys(next_sessions) if derive_backfill_keys else list(backfill_keys or [])
+        )
+        self._schedule_tail_backfill(target_backfill_keys)
+
+    def _replace_session_view(
+        self,
+        sessions: list[dict[str, Any]],
+        active_for_view: str,
+        *,
+        sidebar_channels: set[str] | None = None,
+        backfill_keys: list[str] | None = None,
+        derive_backfill_keys: bool = False,
+    ) -> None:
+        self._commit_session_view(
+            sessions,
+            active_for_view,
+            model_apply=self._model.reset_sessions,
+            sidebar_channels=sidebar_channels,
+            backfill_keys=backfill_keys,
+            derive_backfill_keys=derive_backfill_keys,
+        )
+
+    def _commit_active_view(
+        self,
+        key: str,
+        *,
+        sidebar_channels: set[str] | None = None,
+        emit_sessions_changed: bool,
+    ) -> None:
+        self._active_key = key
+        self._rebuild_sidebar_projection(sidebar_channels)
+        if emit_sessions_changed:
+            self.sessionsChanged.emit()
+        self._emit_active_summary(key)
+        self._emit_active_key_if_changed(key)
 
     def _set_local_active_key(self, key: str) -> None:
         if self._active_key == key:
             return
-        self._active_key = key
         self._model.set_active(key)
-        self._rebuild_sidebar_projection()
         if _DEBUG_SWITCH:
             logger.debug("session_select_commit key={}", key)
-        self._emit_active_summary(key)
-        self._emit_active_key_if_changed(key)
+        self._commit_active_view(key, emit_sessions_changed=False)
 
     def _finalize_active_resolution(self, active_for_view: str) -> None:
         self._clear_pending_select_if_resolved(active_for_view)
 
     def _desktop_startup_target_key(self) -> str:
         active_key = self._active_key
-        if active_key and _session_channel_key(active_key) == "desktop":
+        if active_key and session_channel_key(active_key) == "desktop":
             for session in self._model._sessions:
                 if str(session.get("key", "")) == active_key:
                     return active_key
         for session in self._model._sessions:
             key = str(session.get("key", ""))
-            if _session_channel_key(key) == "desktop":
+            if session_channel_key(key) == "desktop":
                 return key
         return ""
 
@@ -1029,35 +937,24 @@ class SessionService(QObject):
     def _handle_session_change(self, event: object) -> None:
         if self._disposed or not isinstance(event, SessionChangeEvent):
             return
-        if event.kind == "deleted" and event.session_key in self._pending_deletes:
+        if event.session_key in self._pending_deletes:
             return
+        if event.kind in {"metadata", "messages"}:
+            load_entry = getattr(self._session_manager, "get_session_list_entry", None)
+            if callable(load_entry):
+                request_seq = self._session_entry_request_seq.get(event.session_key, 0) + 1
+                self._session_entry_request_seq[event.session_key] = request_seq
+                fut = self._submit_safe(
+                    self._load_session_entry(
+                        event.session_key,
+                        request_seq=request_seq,
+                        generation=self._session_entry_generation,
+                    )
+                )
+                if fut is not None:
+                    fut.add_done_callback(self._on_session_entry_done)
+                    return
         self.refresh()
-
-    @staticmethod
-    def _pick_latest_key(sessions: list[dict[str, Any]], *, preferred_channel: str) -> str:
-        def _updated_at_sort_value(item: dict[str, Any]) -> tuple[int, float | str]:
-            v = item.get("updated_at", "")
-            if isinstance(v, (int, float)):
-                return (2, float(v))
-            if isinstance(v, str) and v:
-                return (1, v)
-            return (0, "")
-
-        def _key_value(item: dict[str, Any]) -> str:
-            v = item.get("key", "")
-            return str(v) if v is not None else ""
-
-        preferred = [s for s in sessions if str(s.get("channel", "")) == preferred_channel]
-        candidates = preferred if preferred else sessions
-        if not candidates:
-            return ""
-        sort_values = [_updated_at_sort_value(s) for s in candidates]
-        if not any(v[0] > 0 for v in sort_values):
-            return _key_value(candidates[0])
-        if len(set(sort_values)) == 1:
-            return _key_value(candidates[0])
-        best = max(candidates, key=lambda s: (_updated_at_sort_value(s), _key_value(s)))
-        return _key_value(best)
 
     def _clear_pending_select_if_resolved(self, active_key: str) -> None:
         if self._pending_select_key is not None and active_key == self._pending_select_key:
@@ -1073,6 +970,7 @@ class SessionService(QObject):
             return
         if self._session_manager is None:
             return
+        self._session_entry_generation += 1
         self._begin_list_request()
         self._list_request_seq += 1
         seq = self._list_request_seq
@@ -1108,16 +1006,13 @@ class SessionService(QObject):
         self._pending_creates.add(key)
 
         sessions_after = [
-            _build_session_item(key, natural_key=self._natural_key),
+            build_session_item(key, natural_key=self._natural_key),
             *sessions_before,
         ]
 
         self._gateway_ready = True
         self._pending_select_key = key
-        self._set_local_active_key(key)
-        self._model.reset_sessions(sessions_after, key)
-        self._rebuild_sidebar_projection()
-        self.sessionsChanged.emit()
+        self._replace_session_view(sessions_after, key)
 
         fut = self._submit_safe(self._create_session(key, self._next_active_commit_seq()))
         if fut is None:
@@ -1165,7 +1060,7 @@ class SessionService(QObject):
         if not sessions_after:
             new_active = self._build_new_session_key("")
             self._pending_creates.add(new_active)
-            sessions_after = [_build_session_item(new_active, natural_key=self._natural_key)]
+            sessions_after = [build_session_item(new_active, natural_key=self._natural_key)]
             create_seq = self._next_active_commit_seq()
             fut_create = self._submit_safe(self._create_session(new_active, create_seq))
             if fut_create is not None:
@@ -1173,7 +1068,7 @@ class SessionService(QObject):
                     lambda future, k=new_active: self._on_create_done(k, future)
                 )
         elif active_before == key:
-            new_active = self._pick_latest_key(
+            new_active = pick_latest_key(
                 sessions_after,
                 preferred_channel=(removed_channel or "desktop"),
             )
@@ -1188,11 +1083,7 @@ class SessionService(QObject):
             new_active,
             dict(self._sidebar_expanded_groups),
         )
-        self._active_key = new_active
-        self._model.reset_sessions(sessions_after, new_active)
-        self._rebuild_sidebar_projection()
-        self.sessionsChanged.emit()
-        self._emit_active_key_if_changed(new_active)
+        self._replace_session_view(sessions_after, new_active)
 
         delete_seq = self._next_active_commit_seq() if active_before == key else None
         fut = self._submit_safe(self._delete_session(key, new_active, delete_seq))
@@ -1215,71 +1106,32 @@ class SessionService(QObject):
 
     async def _list_sessions(self, seq: int) -> tuple[int, list[dict[str, Any]], str]:
         sm = self._session_manager
-        sessions = await self._run_user_io(sm.list_sessions)
+        raw_sessions = await self._run_user_io(sm.list_sessions)
         active_raw = await self._run_user_io(sm.get_active_session_key, self._natural_key)
         active = active_raw or ""
-        title_by_key: dict[str, str] = {}
-        parents_with_running_children: set[str] = set()
-        for session in sessions:
-            key = str(session.get("key") or "")
-            meta = session.get("metadata")
-            title_by_key[key] = _format_display_title(
-                key,
-                meta.get("title") if isinstance(meta, dict) else None,
+        result = [
+            project_session_item(
+                session,
                 natural_key=self._natural_key,
+                current_sessions=[],
             )
-            if not isinstance(meta, dict):
-                continue
-            if str(meta.get("child_status") or "") != "running":
-                continue
-            parent_key = str(meta.get("parent_session_key") or "")
-            if parent_key:
-                parents_with_running_children.add(parent_key)
-        result = []
-        for s in sessions:
-            key = s["key"]
-            meta = s.get("metadata", {})
-            session_kind = str(meta.get("session_kind") or "regular")
-            read_only = bool(meta.get("read_only", False))
-            parent_session_key = str(meta.get("parent_session_key") or "")
-            child_status = str(meta.get("child_status") or "")
-            is_running = (
-                bool(meta.get("session_running", False))
-                or child_status == "running"
-                or key in parents_with_running_children
-            )
-            channel = (
-                _session_channel_key(parent_session_key)
-                if session_kind == "subagent_child" and parent_session_key
-                else _session_channel_key(key)
-            )
-            last_ai = meta.get("desktop_last_ai_at")
-            last_seen_ai = meta.get("desktop_last_seen_ai_at")
-            has_unread = False
-            if isinstance(last_ai, str) and last_ai:
-                seen_ai = (
-                    last_seen_ai if isinstance(last_seen_ai, str) and last_seen_ai else last_ai
-                )
-                has_unread = seen_ai < last_ai
-            result.append(
-                _build_session_item(
-                    key,
-                    natural_key=self._natural_key,
-                    updated_at=s.get("updated_at", ""),
-                    channel=channel,
-                    has_unread=has_unread,
-                    title=meta.get("title"),
-                    message_count=s.get("message_count"),
-                    has_messages=s.get("has_messages"),
-                    session_kind=session_kind,
-                    read_only=read_only,
-                    parent_session_key=parent_session_key,
-                    parent_title=title_by_key.get(parent_session_key, ""),
-                    child_status=child_status,
-                    is_running=is_running,
-                )
-            )
-        return seq, result, active
+            for session in raw_sessions
+        ]
+        return seq, normalize_session_items(result), active
+
+    async def _load_session_entry(
+        self,
+        key: str,
+        *,
+        request_seq: int,
+        generation: int,
+    ) -> tuple[str, int, int, dict[str, Any] | None]:
+        sm = self._session_manager
+        load_entry = getattr(sm, "get_session_list_entry", None)
+        if not callable(load_entry):
+            return key, request_seq, generation, None
+        entry = await self._run_user_io(load_entry, key)
+        return key, request_seq, generation, entry
 
     async def _commit_active_selection(self, key: str, seq: int) -> None:
         sm = self._session_manager
@@ -1378,6 +1230,17 @@ class SessionService(QObject):
         else:
             self._listResult.emit(True, "", future.result())
 
+    def _on_session_entry_done(self, future: Any) -> None:
+        if self._disposed:
+            return
+        if future.cancelled():
+            return
+        exc = self._future_exception_or_none(future)
+        if exc:
+            self._sessionEntryResult.emit(False, str(exc), None)
+        else:
+            self._sessionEntryResult.emit(True, "", future.result())
+
     def _on_select_done(self, future: Any) -> None:
         if self._disposed:
             return
@@ -1437,7 +1300,7 @@ class SessionService(QObject):
             raw_sessions, raw_active = data
             if not isinstance(raw_sessions, list):
                 return
-            sessions = _filter_session_dicts(raw_sessions)
+            sessions = filter_session_dicts(raw_sessions)
             if isinstance(raw_active, str):
                 stored_active = raw_active
         pending_keys = set(self._pending_deletes.keys())
@@ -1452,7 +1315,7 @@ class SessionService(QObject):
                     continue
                 sessions.insert(
                     0,
-                    _build_session_item(key, natural_key=self._natural_key),
+                    build_session_item(key, natural_key=self._natural_key),
                 )
                 existing_keys.add(key)
 
@@ -1460,17 +1323,17 @@ class SessionService(QObject):
 
         active_for_view = ""
         auto_selected_key = ""
-        pending_candidate = _visible_session_key(
+        pending_candidate = visible_session_key(
             (self._pending_select_key or "",),
             available_keys=available_keys,
             pending_create_keys=pending_create_keys,
         )
-        local_active_candidate = _visible_session_key(
+        local_active_candidate = visible_session_key(
             (self._active_key,),
             available_keys=available_keys,
             pending_create_keys=pending_create_keys,
         )
-        stored_active_candidate = _visible_session_key_for_channel(
+        stored_active_candidate = visible_session_key_for_channel(
             (stored_active,),
             available_keys=available_keys,
             pending_create_keys=pending_create_keys,
@@ -1491,7 +1354,7 @@ class SessionService(QObject):
 
         if self._gateway_ready and not self._pending_select_key and not active_for_view:
             if sessions:
-                active_for_view = self._pick_latest_key(sessions, preferred_channel="desktop")
+                active_for_view = pick_latest_key(sessions, preferred_channel="desktop")
                 auto_selected_key = active_for_view
             else:
                 if self._session_manager is not None:
@@ -1502,22 +1365,7 @@ class SessionService(QObject):
             self._active_key = ""
             self._emit_active_key_if_changed("")
 
-        for item in sessions:
-            if str(item.get("key", "")) == active_for_view:
-                item["has_unread"] = False
-        self._active_key = active_for_view
-        self._model.reset_sessions(sessions, active_for_view)
-        self._rebuild_sidebar_projection()
-        self.sessionsChanged.emit()
-        self._emit_active_summary(active_for_view)
-        fut = self._submit_safe(
-            self._backfill_listed_session_tails(
-                [str(item.get("key", "")).strip() for item in sessions]
-            )
-        )
-        if fut is not None:
-            fut.add_done_callback(self._on_backfill_done)
-        self._emit_active_key_if_changed(active_for_view)
+        self._apply_session_view(sessions, active_for_view)
         self._emit_startup_target_if_applicable()
         self._finalize_active_resolution(active_for_view)
         if auto_selected_key and self._session_manager is not None:
@@ -1526,6 +1374,108 @@ class SessionService(QObject):
             )
             if fut is not None:
                 fut.add_done_callback(self._on_select_done)
+
+
+    def _handle_session_entry_result(self, ok: bool, error: str, data: Any) -> None:
+        if self._disposed:
+            return
+        if not ok:
+            logger.debug("Skip incremental session update: {}", error)
+            self.refresh()
+            return
+        if not (isinstance(data, tuple) and len(data) == 4):
+            self.refresh()
+            return
+        key, request_seq, generation, entry = data
+        if key in self._pending_deletes:
+            return
+        if generation != self._session_entry_generation:
+            return
+        if self._session_entry_request_seq.get(key, 0) != request_seq:
+            return
+        if entry is None or not isinstance(entry, dict):
+            self.refresh()
+            return
+        current_sessions = [dict(item) for item in self._model._sessions]
+        current_by_key = {
+            str(item.get("key", "")): dict(item)
+            for item in current_sessions
+            if str(item.get("key", ""))
+        }
+        old_item = current_by_key.get(str(key))
+        projected = project_session_item(
+            entry,
+            natural_key=self._natural_key,
+            current_sessions=current_sessions,
+        )
+        related_parent_keys = {
+            str(parent_key)
+            for parent_key in (
+                projected.get("parent_session_key", ""),
+                old_item.get("parent_session_key", "") if old_item else "",
+            )
+            if str(parent_key)
+        }
+        affected_keys = {str(key), *related_parent_keys}
+        for item in current_sessions:
+            item_key = str(item.get("key", ""))
+            parent_key = str(item.get("parent_session_key", ""))
+            if parent_key == str(key) or parent_key in related_parent_keys:
+                affected_keys.add(item_key)
+
+        updates: dict[str, dict[str, Any]] = {str(key): projected}
+        for affected_key in affected_keys:
+            if affected_key in updates:
+                continue
+            existing = current_by_key.get(affected_key)
+            if existing is not None:
+                updates[affected_key] = dict(existing)
+
+        normalization_source = [
+            updates.get(item_key, current_by_key[item_key])
+            for item_key in current_by_key
+            if item_key in current_by_key
+        ]
+        normalization_source.extend(
+            session for key, session in updates.items() if key not in current_by_key
+        )
+        title_index = title_by_key(normalization_source)
+        running_parent_index = running_parent_keys(normalization_source)
+        normalized_updates = [
+            normalize_session_item(
+                session,
+                title_index=title_index,
+                running_parent_index=running_parent_index,
+            )
+            for session in updates.values()
+        ]
+        sidebar_channels = {
+            str(item.get("channel", "other") or "other")
+            for item in normalized_updates
+            if str(item.get("key", "")) in affected_keys
+        }
+        if old_item is not None:
+            old_channel = str(old_item.get("channel", "other") or "other")
+            if old_channel:
+                sidebar_channels.add(old_channel)
+        backfill_keys = [str(key)] if bool(projected.get("needs_tail_backfill", False)) else []
+        available_keys = set(current_by_key)
+        available_keys.add(str(key))
+        active_for_view = self._active_key if self._active_key in available_keys else ""
+        if not active_for_view and normalized_updates and not self._pending_select_key:
+            candidate_sessions = [
+                current_by_key[item_key]
+                for item_key in current_by_key
+                if item_key not in updates
+            ] + normalized_updates
+            active_for_view = pick_latest_key(candidate_sessions, preferred_channel="desktop")
+        self._apply_incremental_session_updates(
+            normalized_updates,
+            active_for_view,
+            sidebar_channels=sidebar_channels or None,
+            backfill_keys=backfill_keys,
+        )
+        self._emit_startup_target_if_applicable()
 
     def _handle_select_result(self, ok: bool, error: str, key: str) -> None:
         if self._disposed:
@@ -1570,15 +1520,8 @@ class SessionService(QObject):
                         ]
                         if active_before in pending_keys:
                             active_before = self._active_key
-                    self._active_key = active_before
                     self._sidebar_expanded_groups = dict(expanded_groups_before)
-                    for item in sessions_before:
-                        if str(item.get("key", "")) == active_before:
-                            item["has_unread"] = False
-                    self._model.reset_sessions(sessions_before, active_before)
-                    self._rebuild_sidebar_projection()
-                    self.sessionsChanged.emit()
-                    self._emit_active_key_if_changed(active_before)
+                    self._replace_session_view(sessions_before, active_before)
                 else:
                     self.refresh()
             self.errorOccurred.emit(error)

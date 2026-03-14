@@ -4,9 +4,11 @@ import QtQuick.Controls 2.15
 Item {
     id: root
 
+    property var chatService: null
+    property var sessionService: null
     property string activeSessionKey: ""
     property bool showSelection: true
-    property bool gatewayIdle: !hasChatService || chatService.state === "idle" || chatService.state === "stopped"
+    property bool gatewayIdle: !hasChatService || chatService.gatewayState === "idle"
     property bool projectionMotionEnabled: false
     property real activeHighlightX: 0.0
     property real activeHighlightY: 0.0
@@ -14,8 +16,8 @@ Item {
     property real activeHighlightHeight: 0.0
     property real activeHighlightOpacity: 0.0
 
-    readonly property bool hasChatService: typeof chatService !== "undefined" && chatService !== null
-    readonly property bool hasSessionService: typeof sessionService !== "undefined" && sessionService !== null
+    readonly property bool hasChatService: chatService !== null
+    readonly property bool hasSessionService: sessionService !== null
 
     signal newSessionRequested()
     signal sessionSelected(string key)
