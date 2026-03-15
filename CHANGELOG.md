@@ -6,6 +6,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/), and this pro
 
 ## [Unreleased]
 
+## [0.3.31] - 2026-03-15
+
+### Fixed
+
+- **Desktop PyInstaller 的 QML RCC 构建链现在兼容 CI 差异环境** — macOS 构建脚本不再因 `set -u` 下的空数组展开而中断；`build_qml_rcc.py` 也会在 `PySide6/Qt/libexec` 之外继续回退查找 venv `bin/Scripts` 下的 `pyside6-rcc` / `pyside6-qmlcachegen` 包装器，修复 macOS 与 Windows runner 上的 `.rcc` 生成失败。
+
 ## [0.3.30] - 2026-03-15
 
 ### Fixed
