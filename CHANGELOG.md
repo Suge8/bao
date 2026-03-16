@@ -6,6 +6,20 @@ The format follows [Keep a Changelog](https://keepachangelog.com/), and this pro
 
 ## [Unreleased]
 
+## [0.3.32] - 2026-03-16
+
+### Changed
+
+- **Desktop 指挥舱的 lazy hydration 边界进一步收口** — Control Tower 现在只会在首次进入工作区后 hydrate；冷态配置变化不会提前触发指挥舱 refresh，后续刷新也仅在已 hydrate 的单一路径上发生。
+- **高风险工具审批现统一收口到主代理用户边界** — `tool_approval.py`、tool registry 与 agent loop 现在按工具副作用和风险级别返回显式 `approval_required`，子代理不再维护第二套审批状态或补丁式兜底。
+- **Desktop service 注入与 workspace read-model 边界进一步简化** — 桌面端继续沿着显式注入和单一读模型收口，减少页面本地派生状态与重复控制逻辑。
+- **Provider runtime 与 session control 的执行边界进一步统一** — 共享执行骨架、运行时配置和 session run controller 现在沿单一路径协作，减少 provider/runtime/session 之间的分叉语义。
+
+### Fixed
+
+- **设置页最小窗口下的新增 Provider 入口恢复完整可点击区域** — 桌面 UI smoke harness 现在会把目标项完整滚入可见区域，避免 CTA 只露出一部分导致最小窗口场景下无法点击。
+- **Desktop smoke、qmllint 与高风险测试护栏已对齐当前 UI/架构契约** — smoke baseline、脚本入口和相关测试现与新的桌面 workspace 生命周期、审批门禁与注入边界保持一致。
+
 ## [0.3.31] - 2026-03-15
 
 ### Fixed
