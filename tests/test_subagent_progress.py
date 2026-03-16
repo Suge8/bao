@@ -1797,10 +1797,8 @@ def test_shared_subagent_result_event_helpers_normalize_contract():
         "status": "ok",
         "result": "done",
     }
-    parsed = shared.parse_subagent_result_event({"system_event": event})
+    parsed = shared.parse_subagent_result_payload(event)
     assert parsed == event
-    parsed_control = shared.parse_subagent_result_event({"control_event": event})
-    assert parsed_control == event
 
 
 def test_persist_child_result_clears_runtime_overlay_but_keeps_stable_status(manager, tmp_path):

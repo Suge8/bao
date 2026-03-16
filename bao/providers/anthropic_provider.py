@@ -2,23 +2,20 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 from typing import Any, Awaitable, Callable
 
 from loguru import logger
 
-from bao.providers.base import LLMProvider, LLMResponse, ToolCallRequest
+from bao.providers.base import LLMProvider, LLMResponse, ProviderCapabilitySnapshot, ToolCallRequest
 from bao.providers.retry import (
     DEFAULT_BASE_DELAY,
     DEFAULT_MAX_RETRIES,
-    ProgressCallbackError,
-    StreamInterruptedError,
     emit_progress,
     emit_progress_reset,
-    run_with_retries,
     safe_error_text,
 )
+from bao.providers.runtime import ProviderRetryPolicy, ProviderRuntimeExecutor
 
 _MAX_RETRIES = DEFAULT_MAX_RETRIES
 _BASE_DELAY = DEFAULT_BASE_DELAY
@@ -90,6 +87,20 @@ class AnthropicProvider(LLMProvider):
         """Check if model supports extended thinking."""
         model_lower = model.lower()
         return any(think_model in model_lower for think_model in self.EXTENDED_THINKING_MODELS)
+
+    def get_capability_snapshot(self, model: str | None = None) -> ProviderCapabilitySnapshot:
+        resolved_model = self._resolve_model(model or self.default_model)
+        return ProviderCapabilitySnapshot(
+            provider_name="anthropic",
+            default_api_mode="messages",
+            supported_api_modes=("messages",),
+            supports_streaming=True,
+            supports_tools=True,
+            supports_reasoning_effort=True,
+            supports_service_tier=False,
+            supports_prompt_caching=True,
+            supports_thinking=self._supports_extended_thinking(resolved_model),
+        )
 
     @staticmethod
     def _budget_from_reasoning_effort(reasoning_effort: str | None) -> int | None:
@@ -382,6 +393,10 @@ class AnthropicProvider(LLMProvider):
 
         content = ""
         retry_count = 0
+        executor = ProviderRuntimeExecutor(
+            "anthropic",
+            partial_content=lambda: content or None,
+        )
 
         async def _on_retry(exc: BaseException, attempt: int, delay: float) -> None:
             nonlocal retry_count
@@ -476,34 +491,20 @@ class AnthropicProvider(LLMProvider):
                 thinking_blocks=thinking_blocks or None,
             )
 
-        try:
-            return await run_with_retries(
-                _run_once,
-                max_retries=_MAX_RETRIES,
-                base_delay=_BASE_DELAY,
-                on_retry=_on_retry,
+        result = await executor.run(
+            _run_once,
+            retry_policy=ProviderRetryPolicy(max_retries=_MAX_RETRIES, base_delay=_BASE_DELAY),
+            on_retry=_on_retry,
+            error_prefix="Error calling Anthropic",
+            progress_error_prefix="Error calling Anthropic progress callback",
+        )
+        if retry_count > 0 and isinstance(result, LLMResponse) and result.finish_reason == "error":
+            logger.error(
+                "❌ Anthropic 最终失败 / final failure: after {} attempts: {}",
+                retry_count + 1,
+                result.content or "unknown error",
             )
-        except asyncio.CancelledError:
-            raise
-        except ProgressCallbackError as exc:
-            if isinstance(exc, StreamInterruptedError):
-                return LLMResponse(content=content or None, finish_reason="interrupted")
-            cause = exc.__cause__ or exc
-            return LLMResponse(
-                content=f"Error calling Anthropic progress callback: {safe_error_text(cause)}",
-                finish_reason="error",
-            )
-        except Exception as e:
-            if retry_count > 0:
-                logger.error(
-                    "❌ Anthropic 最终失败 / final failure: after {} attempts: {}",
-                    retry_count + 1,
-                    safe_error_text(e),
-                )
-            return LLMResponse(
-                content=f"Error calling Anthropic: {safe_error_text(e)}",
-                finish_reason="error",
-            )
+        return result
 
     def _parse_response(self, response: Any) -> LLMResponse:
         """Parse Anthropic response into LLMResponse."""

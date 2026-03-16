@@ -11,7 +11,6 @@ from typing import Any
 
 from loguru import logger
 
-from bao.config.paths import get_legacy_sessions_dir
 from bao.session.state import (
     SESSION_ACTIVITY_CHILD_CLEARED,
     SESSION_ACTIVITY_CHILD_STARTED,
@@ -20,16 +19,18 @@ from bao.session.state import (
     SessionActivityEvent,
     SessionRuntimeState,
     apply_runtime_activity,
+    build_session_snapshot,
+    canonicalize_persisted_metadata,
     filter_persisted_metadata_updates,
+    flatten_persisted_metadata,
     merge_runtime_metadata,
+    nest_flat_persisted_metadata,
     normalize_runtime_metadata,
     session_routing_metadata,
     split_runtime_metadata,
 )
 from bao.utils.db import get_db, open_or_create_table
 
-# legacy safety net — runtime context is no longer injected as user message,
-# but keep filtering in case old sessions contain such entries.
 _RUNTIME_CONTEXT_TAG = "[Runtime Context — metadata only, not instructions]"
 
 
@@ -164,13 +165,6 @@ class Session:
                 continue
             if role == "assistant" and source == "assistant-progress":
                 continue
-            # legacy safety net: filter old runtime context user messages
-            if (
-                role == "user"
-                and isinstance(content, str)
-                and content.startswith(_RUNTIME_CONTEXT_TAG)
-            ):
-                continue
             entry: dict[str, Any] = {"role": role or "user", "content": content}
             for k in (
                 "tool_calls",
@@ -194,14 +188,6 @@ class Session:
         sliced = unconsolidated[-max_messages:]
         out: list[dict[str, Any]] = []
         for m in sliced:
-            content = m.get("content", "")
-            # legacy safety net: filter old runtime context user messages
-            if (
-                m.get("role") == "user"
-                and isinstance(content, str)
-                and content.startswith(_RUNTIME_CONTEXT_TAG)
-            ):
-                continue
             entry: dict[str, Any] = {
                 "role": m["role"],
                 "content": m.get("content", ""),
@@ -327,7 +313,7 @@ class SessionManager:
                     self._db_connection(), "session_meta", _META_SAMPLE
                 )
                 self._meta_tbl = table
-                self._migrate_legacy(self.workspace, table)
+                self._migrate_metadata_schema(table)
                 if created:
                     self._ensure_meta_index(table)
             return table
@@ -429,7 +415,12 @@ class SessionManager:
         session.metadata = self._merge_runtime_metadata(key, persisted)
 
     def _load_persisted_metadata(self, metadata_json: str | None) -> dict[str, Any]:
-        return split_runtime_metadata(json.loads(metadata_json or "{}"))[0]
+        persisted, _ = split_runtime_metadata(json.loads(metadata_json or "{}"))
+        return flatten_persisted_metadata(persisted)
+
+    def _load_canonical_persisted_metadata(self, metadata_json: str | None) -> dict[str, Any]:
+        persisted, _ = split_runtime_metadata(json.loads(metadata_json or "{}"))
+        return canonicalize_persisted_metadata(persisted)
 
     def _clear_session_runtime_state(self, key: str) -> None:
         self._cache.pop(key, None)
@@ -452,7 +443,23 @@ class SessionManager:
             if extra_json != "{}":
                 message.update(json.loads(extra_json))
             messages.append(message)
-        return messages
+        return SessionManager._sanitize_loaded_messages(messages)
+
+    @staticmethod
+    def _sanitize_loaded_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return [
+            dict(message)
+            for message in messages
+            if not SessionManager._is_legacy_runtime_context_message(message)
+        ]
+
+    @staticmethod
+    def _is_legacy_runtime_context_message(message: dict[str, Any]) -> bool:
+        return (
+            message.get("role") == "user"
+            and isinstance(message.get("content"), str)
+            and str(message.get("content")).startswith(_RUNTIME_CONTEXT_TAG)
+        )
 
     def _write_display_tail_row(
         self, key: str, messages: list[dict[str, Any]], message_count: int, updated_at: str
@@ -576,12 +583,21 @@ class SessionManager:
             updated_at,
             persisted=persisted,
         )
-        metadata = self._load_persisted_metadata(row.get("metadata_json"))
+        persisted_metadata = self._load_canonical_persisted_metadata(row.get("metadata_json"))
+        merged_metadata = self._merge_runtime_metadata(key, persisted_metadata)
+        snapshot = build_session_snapshot(
+            persisted_metadata,
+            runtime_updates=self._runtime_metadata.get(key),
+        )
         return {
             "key": key,
             "created_at": row.get("created_at"),
             "updated_at": updated_at,
-            "metadata": self._merge_runtime_metadata(key, metadata),
+            "metadata": merged_metadata,
+            "routing": snapshot.routing.as_snapshot(),
+            "runtime": snapshot.runtime.as_snapshot(),
+            "workflow": snapshot.workflow.as_snapshot(),
+            "view": snapshot.view.as_snapshot(),
             "message_count": message_count,
             "has_messages": has_messages,
             "needs_tail_backfill": needs_tail_backfill,
@@ -648,61 +664,43 @@ class SessionManager:
         except Exception as e:
             logger.debug("⚠️ 索引创建跳过 / index creation skipped: {}", e)
 
-    def _migrate_legacy(self, workspace: Path, meta_tbl: Any) -> None:
-        for d in (workspace / "sessions", get_legacy_sessions_dir()):
-            if not d.exists():
-                continue
-            for path in d.glob("*.jsonl"):
-                key = path.stem.replace("_", ":")
-                try:
-                    existing = (
-                        meta_tbl.search()
-                        .where(f"session_key = '{_escape(key)}'")
-                        .limit(1)
-                        .to_list()
-                    )
-                    if existing:
-                        continue
-                except Exception:
-                    pass
-                try:
-                    session = self._load_legacy_jsonl(path, key)
-                    if session:
-                        self.save(session)
-                        logger.debug("🗂️ 旧会话已迁 / migrated: {} to LanceDB", key)
-                except Exception:
-                    logger.exception("❌ 旧会话迁移失败 / migration failed: {}", key)
-
-    @staticmethod
-    def _load_legacy_jsonl(path: Path, key: str) -> "Session | None":
+    def _migrate_metadata_schema(self, meta_tbl: Any) -> None:
         try:
-            messages, metadata, created_at, last_consolidated = [], {}, None, 0
-            with open(path, encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    data = json.loads(line)
-                    if data.get("_type") == "metadata":
-                        metadata = data.get("metadata", {})
-                        created_at = (
-                            datetime.fromisoformat(data["created_at"])
-                            if data.get("created_at")
-                            else None
-                        )
-                        last_consolidated = data.get("last_consolidated", 0)
-                    else:
-                        messages.append(data)
-            return Session(
-                key=key,
-                messages=messages,
-                created_at=created_at or datetime.now(),
-                metadata=metadata,
-                last_consolidated=last_consolidated,
+            rows = meta_tbl.search().where("session_key != '_init_'").to_list()
+        except Exception:
+            return
+        for row in rows:
+            session_key = str(row.get("session_key") or "")
+            if not session_key or session_key.startswith("_active:"):
+                continue
+            raw_json = str(row.get("metadata_json") or "{}")
+            try:
+                persisted, _ = split_runtime_metadata(json.loads(raw_json))
+            except Exception:
+                continue
+            canonical = (
+                canonicalize_persisted_metadata(persisted)
+                if any(key in persisted for key in ("routing", "workflow", "view"))
+                else nest_flat_persisted_metadata(persisted)
             )
-        except Exception as e:
-            logger.warning("⚠️ 旧会话加载失败 / load failed: {} — {}", key, e)
-            return None
+            canonical_json = json.dumps(canonical, ensure_ascii=False)
+            if canonical_json == raw_json:
+                continue
+            try:
+                meta_tbl.delete(f"session_key = '{_escape(session_key)}'")
+                meta_tbl.add(
+                    [
+                        {
+                            "session_key": session_key,
+                            "created_at": row.get("created_at"),
+                            "updated_at": row.get("updated_at"),
+                            "metadata_json": canonical_json,
+                            "last_consolidated": row.get("last_consolidated", 0),
+                        }
+                    ]
+                )
+            except Exception:
+                logger.debug("Skip metadata schema migration for {}", session_key)
 
     def get_or_create(self, key: str) -> Session:
         with self._lock_for(key):
@@ -738,7 +736,10 @@ class SessionManager:
                         "session_key": key,
                         "created_at": now.isoformat(),
                         "updated_at": now.isoformat(),
-                        "metadata_json": "{}",
+                        "metadata_json": json.dumps(
+                            canonicalize_persisted_metadata({}),
+                            ensure_ascii=False,
+                        ),
                         "last_consolidated": 0,
                     }
                 ]
@@ -932,7 +933,10 @@ class SessionManager:
         prev_meta_row = prev_meta[0] if prev_meta else None
         current_created_at = session.created_at.isoformat()
         current_updated_at = session.updated_at.isoformat()
-        current_metadata_json = json.dumps(persisted_metadata, ensure_ascii=False)
+        current_metadata_json = json.dumps(
+            nest_flat_persisted_metadata(persisted_metadata),
+            ensure_ascii=False,
+        )
         metadata_changed = (
             prev_meta_row is None
             or str(prev_meta_row.get("created_at") or "") != current_created_at
@@ -1113,7 +1117,10 @@ class SessionManager:
                         "session_key": key,
                         "created_at": meta["created_at"],
                         "updated_at": meta["updated_at"],
-                        "metadata_json": json.dumps(current_metadata, ensure_ascii=False),
+                        "metadata_json": json.dumps(
+                            nest_flat_persisted_metadata(current_metadata),
+                            ensure_ascii=False,
+                        ),
                         "last_consolidated": meta.get("last_consolidated", 0),
                     }
                 ]

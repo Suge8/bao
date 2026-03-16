@@ -10,7 +10,7 @@ from typing import Any, AsyncGenerator, Awaitable, Callable
 import httpx
 from oauth_cli_kit import get_token as get_codex_token
 
-from bao.providers.base import LLMProvider, LLMResponse, ToolCallRequest
+from bao.providers.base import LLMProvider, LLMResponse, ProviderCapabilitySnapshot, ToolCallRequest
 from bao.providers.openai_provider import (
     _normalize_openai_reasoning_effort,
     _normalize_service_tier,
@@ -23,12 +23,8 @@ from bao.providers.responses_compat import (
     replace_responses_tool_call_arguments,
     start_responses_tool_call,
 )
-from bao.providers.retry import (
-    ProgressCallbackError,
-    StreamInterruptedError,
-    emit_progress,
-    safe_error_text,
-)
+from bao.providers.retry import emit_progress
+from bao.providers.runtime import ProviderRuntimeExecutor
 
 DEFAULT_CODEX_URL = "https://chatgpt.com/backend-api/codex/responses"
 DEFAULT_ORIGINATOR = "Bao"
@@ -40,6 +36,20 @@ class OpenAICodexProvider(LLMProvider):
     def __init__(self, default_model: str = "openai-codex/gpt-5.1-codex"):
         super().__init__(api_key=None, api_base=None)
         self.default_model = default_model
+
+    def get_capability_snapshot(self, model: str | None = None) -> ProviderCapabilitySnapshot:
+        del model
+        return ProviderCapabilitySnapshot(
+            provider_name="openai-codex",
+            default_api_mode="responses",
+            supported_api_modes=("responses",),
+            supports_streaming=True,
+            supports_tools=True,
+            supports_reasoning_effort=True,
+            supports_service_tier=True,
+            supports_prompt_caching=True,
+            supports_thinking=True,
+        )
 
     async def chat(
         self,
@@ -89,8 +99,9 @@ class OpenAICodexProvider(LLMProvider):
             body["parallel_tool_calls"] = True
 
         url = DEFAULT_CODEX_URL
+        executor = ProviderRuntimeExecutor("openai-codex")
 
-        try:
+        async def _run_once() -> LLMResponse:
             content, tool_calls, finish_reason = await _request_codex(
                 url, headers, body, verify=True, on_progress=on_progress
             )
@@ -99,21 +110,13 @@ class OpenAICodexProvider(LLMProvider):
                 tool_calls=tool_calls,
                 finish_reason=finish_reason,
             )
-        except asyncio.CancelledError:
-            raise
-        except ProgressCallbackError as exc:
-            if isinstance(exc, StreamInterruptedError):
-                return LLMResponse(content=None, finish_reason="interrupted")
-            cause = exc.__cause__ or exc
-            return LLMResponse(
-                content=f"Error calling Codex progress callback: {safe_error_text(cause)}",
-                finish_reason="error",
-            )
-        except Exception as e:
-            return LLMResponse(
-                content=f"Error calling Codex: {safe_error_text(e)}",
-                finish_reason="error",
-            )
+
+        result = await executor.run(
+            _run_once,
+            error_prefix="Error calling Codex",
+            progress_error_prefix="Error calling Codex progress callback",
+        )
+        return result
 
     def get_default_model(self) -> str:
         return self.default_model

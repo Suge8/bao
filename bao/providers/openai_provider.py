@@ -11,7 +11,13 @@ import httpx
 from loguru import logger
 
 from bao.providers.api_mode_cache import get_cached_mode, set_cached_mode
-from bao.providers.base import LLMProvider, LLMResponse, ToolCallRequest, normalize_tool_calls
+from bao.providers.base import (
+    LLMProvider,
+    LLMResponse,
+    ProviderCapabilitySnapshot,
+    ToolCallRequest,
+    normalize_tool_calls,
+)
 from bao.providers.responses_compat import (
     append_responses_tool_call_arguments,
     build_responses_tool_call_request,
@@ -28,9 +34,9 @@ from bao.providers.retry import (
     StreamInterruptedError,
     emit_progress,
     emit_progress_reset,
-    run_with_retries,
     safe_error_text,
 )
+from bao.providers.runtime import ProviderError, ProviderRetryPolicy, ProviderRuntimeExecutor
 
 _ALLOWED_MSG_KEYS = frozenset({"role", "content", "tool_calls", "tool_call_id", "name"})
 
@@ -135,6 +141,20 @@ class OpenAICompatibleProvider(LLMProvider):
 
     def _supports_prompt_caching(self) -> bool:
         return self.provider_name.lower() in self.PROMPT_CACHING_PROVIDERS
+
+    def get_capability_snapshot(self, model: str | None = None) -> ProviderCapabilitySnapshot:
+        resolved_model = self._resolve_model(model or self.default_model)
+        return ProviderCapabilitySnapshot(
+            provider_name=self.provider_name,
+            default_api_mode=self._resolve_effective_mode(),
+            supported_api_modes=("responses", "completions"),
+            supports_streaming=True,
+            supports_tools=True,
+            supports_reasoning_effort=self._supports_reasoning_effort(resolved_model),
+            supports_service_tier=True,
+            supports_prompt_caching=self._supports_prompt_caching(),
+            supports_thinking=self._supports_reasoning_effort(resolved_model),
+        )
 
     def _apply_cache_control(
         self,
@@ -490,6 +510,10 @@ class OpenAICompatibleProvider(LLMProvider):
 
         content = ""
         retry_count = 0
+        executor = ProviderRuntimeExecutor(
+            self.provider_name,
+            partial_content=lambda: content or None,
+        )
 
         async def _on_retry(exc: BaseException, attempt: int, delay: float) -> None:
             nonlocal retry_count
@@ -569,34 +593,20 @@ class OpenAICompatibleProvider(LLMProvider):
                 reasoning_content=reasoning_content,
             )
 
-        try:
-            return await run_with_retries(
-                _run_once,
-                max_retries=_MAX_RETRIES,
-                base_delay=_BASE_DELAY,
-                on_retry=_on_retry,
+        result = await executor.run(
+            _run_once,
+            retry_policy=ProviderRetryPolicy(max_retries=_MAX_RETRIES, base_delay=_BASE_DELAY),
+            on_retry=_on_retry,
+            error_prefix="Error calling LLM",
+            progress_error_prefix="Error calling LLM progress callback",
+        )
+        if retry_count > 0 and isinstance(result, LLMResponse) and result.finish_reason == "error":
+            logger.error(
+                "❌ LLM 最终失败 / final failure: after {} attempts: {}",
+                retry_count + 1,
+                result.content or "unknown error",
             )
-        except asyncio.CancelledError:
-            raise
-        except ProgressCallbackError as exc:
-            if isinstance(exc, StreamInterruptedError):
-                return LLMResponse(content=content or None, finish_reason="interrupted")
-            cause = exc.__cause__ or exc
-            return LLMResponse(
-                content=f"Error calling LLM progress callback: {safe_error_text(cause)}",
-                finish_reason="error",
-            )
-        except Exception as e:
-            if retry_count > 0:
-                logger.error(
-                    "❌ LLM 最终失败 / final failure: after {} attempts: {}",
-                    retry_count + 1,
-                    safe_error_text(e),
-                )
-            return LLMResponse(
-                content=f"Error calling LLM: {safe_error_text(e)}",
-                finish_reason="error",
-            )
+        return result
 
     def _build_responses_body(
         self,
@@ -661,6 +671,7 @@ class OpenAICompatibleProvider(LLMProvider):
         url = f"{self._effective_base.rstrip('/')}/responses"
         headers = self._build_responses_headers()
         retry_count = 0
+        executor = ProviderRuntimeExecutor(self.provider_name)
 
         async def _on_retry(exc: BaseException, attempt: int, delay: float) -> None:
             nonlocal retry_count
@@ -687,61 +698,38 @@ class OpenAICompatibleProvider(LLMProvider):
                             if allow_fallback and _system_prompt_seems_ignored(
                                 system_prompt, result.content
                             ):
-                                set_cached_mode(self._effective_base, "completions")
-                                return await self._chat_completions(
-                                    model,
-                                    messages,
-                                    tools,
-                                    max_tokens,
-                                    temperature,
-                                    on_progress,
-                                    source,
-                                    reasoning_effort,
-                                    service_tier,
+                                raise ProviderError(
+                                    provider_name=self.provider_name,
+                                    code="responses_prompt_ignored",
+                                    message="Responses API ignored the system prompt",
+                                    retryable=False,
+                                    fallback_target="completions",
                                 )
                             return result
 
                         status_err = _ResponsesHTTPStatusError(resp)
                         if resp.status_code in _PROBE_FALLBACK_CODES and allow_fallback:
-                            logger.debug(
-                                "🤖 响应不支持 / unsupported: [{}] status {}, falling back to Chat Completions",
-                                source,
-                                resp.status_code,
-                            )
-                            set_cached_mode(self._effective_base, "completions")
-                            return await self._chat_completions(
-                                model,
-                                messages,
-                                tools,
-                                max_tokens,
-                                temperature,
-                                on_progress,
-                                source,
-                                reasoning_effort,
-                                service_tier,
+                            raise ProviderError(
+                                provider_name=self.provider_name,
+                                code="responses_unsupported",
+                                message=f"Responses API unsupported with status {resp.status_code}",
+                                retryable=False,
+                                status_code=resp.status_code,
+                                fallback_target="completions",
                             )
                         raise status_err
             except asyncio.CancelledError:
                 raise
-        try:
-            return await run_with_retries(
-                _run_once,
-                max_retries=_MAX_RETRIES,
-                base_delay=_BASE_DELAY,
-                on_retry=_on_retry,
-            )
-        except asyncio.CancelledError:
-            raise
-        except ProgressCallbackError as exc:
-            return self._progress_callback_error_response(exc)
-        except Exception as exc:
+        async def _fallback(exc: ProviderError) -> LLMResponse:
+            if exc.code in {"responses_unsupported", "responses_prompt_ignored"}:
+                set_cached_mode(self._effective_base, "completions")
             if allow_fallback:
                 logger.debug(
                     "🤖 回退补全 / fallback: [{}] request failed model={} base={} ({}), trying Chat Completions",
                     source,
                     model,
                     self._effective_base,
-                    safe_error_text(exc),
+                    exc.message,
                 )
                 return await self._chat_completions(
                     model,
@@ -754,16 +742,26 @@ class OpenAICompatibleProvider(LLMProvider):
                     reasoning_effort,
                     service_tier,
                 )
-            if retry_count > 0:
-                logger.error(
-                    "❌ Responses 最终失败 / final failure: after {} attempts: {}",
-                    retry_count + 1,
-                    safe_error_text(exc),
-                )
             return LLMResponse(
-                content=f"Error calling Responses API: {safe_error_text(exc)}",
+                content=f"Error calling Responses API: {exc.message}",
                 finish_reason="error",
             )
+        result = await executor.run(
+            _run_once,
+            retry_policy=ProviderRetryPolicy(max_retries=_MAX_RETRIES, base_delay=_BASE_DELAY),
+            on_retry=_on_retry,
+            error_prefix="Error calling Responses API",
+            progress_error_prefix="Error calling LLM progress callback",
+            fallback=_fallback,
+            should_fallback=lambda _exc: allow_fallback,
+        )
+        if retry_count > 0 and isinstance(result, LLMResponse) and result.finish_reason == "error":
+            logger.error(
+                "❌ Responses 最终失败 / final failure: after {} attempts: {}",
+                retry_count + 1,
+                result.content or "unknown error",
+            )
+        return result
 
     async def _chat_with_probe(
         self,
@@ -789,78 +787,57 @@ class OpenAICompatibleProvider(LLMProvider):
         )
         url = f"{self._effective_base.rstrip('/')}/responses"
         headers = self._build_responses_headers()
+        executor = ProviderRuntimeExecutor(self.provider_name)
 
-        try:
+        async def _run_once() -> LLMResponse:
             async with httpx.AsyncClient(timeout=120.0) as client:
                 resp = await client.post(url, headers=headers, json=body)
 
             if resp.status_code in _PROBE_FALLBACK_CODES:
-                logger.debug(
-                    "🤖 探测回退 / probe fallback: [{}] Responses not supported ({}), falling back",
-                    source,
-                    resp.status_code,
-                )
-                set_cached_mode(self._effective_base, "completions")
-                return await self._chat_completions(
-                    model,
-                    messages,
-                    tools,
-                    max_tokens,
-                    temperature,
-                    on_progress,
-                    source,
-                    reasoning_effort,
-                    service_tier,
+                raise ProviderError(
+                    provider_name=self.provider_name,
+                    code="responses_probe_unsupported",
+                    message=f"Responses API not supported ({resp.status_code})",
+                    retryable=False,
+                    status_code=resp.status_code,
+                    fallback_target="completions",
                 )
 
             if resp.status_code == 200:
                 result = self._build_responses_result(self._decode_responses_payload(resp))
                 if _system_prompt_seems_ignored(system_prompt, result.content):
-                    set_cached_mode(self._effective_base, "completions")
-                    return await self._chat_completions(
-                        model,
-                        messages,
-                        tools,
-                        max_tokens,
-                        temperature,
-                        on_progress,
-                        source,
-                        reasoning_effort,
-                        service_tier,
+                    raise ProviderError(
+                        provider_name=self.provider_name,
+                        code="responses_probe_prompt_ignored",
+                        message="Responses probe ignored the system prompt",
+                        retryable=False,
+                        fallback_target="completions",
                     )
                 set_cached_mode(self._effective_base, "responses")
                 logger.info("🤖 响应已启用 / detected: [{}] Responses API cached", source)
                 return result
 
-            logger.debug(
-                "🤖 探测回退 / probe fallback: [{}] Responses returned {} model={} base={}, trying Chat Completions",
-                source,
-                resp.status_code,
-                model,
-                self._effective_base,
+            raise ProviderError(
+                provider_name=self.provider_name,
+                code="responses_probe_failed",
+                message=f"Responses probe returned {resp.status_code}",
+                retryable=False,
+                status_code=resp.status_code,
+                fallback_target="completions",
             )
-            return await self._chat_completions(
-                model,
-                messages,
-                tools,
-                max_tokens,
-                temperature,
-                on_progress,
-                source,
-                reasoning_effort,
-                service_tier,
-            )
-
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:
+        async def _fallback(exc: ProviderError) -> LLMResponse:
             logger.debug(
                 "🤖 探测失败回退 / probe fallback: [{}] probe failed model={} base={} ({}), trying Chat Completions",
                 source,
                 model,
                 self._effective_base,
-                e,
+                exc.message,
             )
+            if exc.code in {
+                "responses_probe_unsupported",
+                "responses_probe_prompt_ignored",
+            }:
+                set_cached_mode(self._effective_base, "completions")
             return await self._chat_completions(
                 model,
                 messages,
@@ -872,6 +849,14 @@ class OpenAICompatibleProvider(LLMProvider):
                 reasoning_effort,
                 service_tier,
             )
+        result = await executor.run(
+            _run_once,
+            error_prefix="Error calling Responses API",
+            progress_error_prefix="Error calling LLM progress callback",
+            fallback=_fallback,
+            should_fallback=lambda _exc: True,
+        )
+        return result
 
     def _parse_completions_response(self, response: Any) -> LLMResponse:
         choice = response.choices[0]

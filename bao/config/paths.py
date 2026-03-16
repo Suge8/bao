@@ -63,7 +63,3 @@ def get_cli_history_path() -> Path:
 
 def get_bridge_install_dir() -> Path:
     return get_data_dir() / "bridge"
-
-
-def get_legacy_sessions_dir() -> Path:
-    return _default_root() / "sessions"

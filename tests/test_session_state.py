@@ -6,9 +6,13 @@ from bao.session.state import (
     SESSION_ACTIVITY_SESSION_STARTED,
     SessionActivityEvent,
     apply_runtime_activity,
+    build_session_snapshot,
+    canonicalize_persisted_metadata,
     desktop_has_unread_ai,
     filter_persisted_metadata_updates,
+    flatten_persisted_metadata,
     merge_runtime_metadata,
+    nest_flat_persisted_metadata,
     session_metadata_group,
     session_routing_metadata,
     split_runtime_metadata,
@@ -40,7 +44,7 @@ def test_split_runtime_metadata_strips_only_running_overlay() -> None:
 
 
 def test_state_helpers_preserve_routing_and_persisted_groups() -> None:
-    metadata = {
+    runtime_metadata = {
         "title": "default",
         "desktop_last_ai_at": "2026-03-14T10:00:00",
         "desktop_last_seen_ai_at": "2026-03-14T09:00:00",
@@ -50,9 +54,10 @@ def test_state_helpers_preserve_routing_and_persisted_groups() -> None:
         "_plan_state": {"goal": "ship"},
         "session_running": True,
     }
+    metadata = nest_flat_persisted_metadata(runtime_metadata)
 
     assert desktop_has_unread_ai(metadata) is True
-    assert filter_persisted_metadata_updates(metadata) == {
+    assert filter_persisted_metadata_updates(runtime_metadata) == {
         "title": "default",
         "desktop_last_ai_at": "2026-03-14T10:00:00",
         "desktop_last_seen_ai_at": "2026-03-14T09:00:00",
@@ -67,15 +72,64 @@ def test_state_helpers_preserve_routing_and_persisted_groups() -> None:
     }
     assert session_routing_metadata(metadata).parent_session_key == "desktop:local::main"
     assert session_metadata_group(metadata, "workflow") == {
+        "coding_sessions": None,
         "_plan_state": {"goal": "ship"},
-        "parent_session_key": "desktop:local::main",
-        "read_only": True,
-        "session_kind": "subagent_child",
+        "_plan_archived": None,
+        "_session_lang": "",
+        "child_outcome": {
+            "status": "",
+            "task_label": "",
+            "last_result_summary": "",
+        },
     }
     assert session_metadata_group(metadata, "view") == {
         "title": "default",
-        "desktop_last_ai_at": "2026-03-14T10:00:00",
-        "desktop_last_seen_ai_at": "2026-03-14T09:00:00",
+        "read_receipts": {
+            "last_ai_at": "2026-03-14T10:00:00",
+            "last_seen_ai_at": "2026-03-14T09:00:00",
+            "has_unread_ai": True,
+        },
+    }
+
+    snapshot = build_session_snapshot(metadata)
+    assert snapshot.routing.as_snapshot() == {
+        "session_kind": "subagent_child",
+        "read_only": True,
+        "parent_session_key": "desktop:local::main",
+    }
+    assert snapshot.workflow.as_snapshot()["child_outcome"] == {
+        "status": "",
+        "task_label": "",
+        "last_result_summary": "",
+    }
+    assert snapshot.view.as_snapshot()["read_receipts"] == {
+        "last_ai_at": "2026-03-14T10:00:00",
+        "last_seen_ai_at": "2026-03-14T09:00:00",
+        "has_unread_ai": True,
+    }
+    assert flatten_persisted_metadata(metadata)["title"] == "default"
+
+
+def test_canonicalize_persisted_metadata_ignores_legacy_flat_fields() -> None:
+    metadata = canonicalize_persisted_metadata(
+        {
+            "title": "legacy",
+            "desktop_last_ai_at": "2026-03-14T10:00:00",
+            "routing": {"session_kind": "regular"},
+        }
+    )
+
+    assert metadata["routing"] == {
+        "session_kind": "regular",
+        "read_only": False,
+        "parent_session_key": "",
+    }
+    assert metadata["view"] == {
+        "title": "",
+        "read_receipts": {
+            "last_ai_at": "",
+            "last_seen_ai_at": "",
+        },
     }
 
 

@@ -309,7 +309,7 @@ def test_available_now_highlights_route_sorted_tools(tmp_path: Path) -> None:
         selected, loop._build_tool_route_text(_msgs("给我搜一个 ai 新闻"))
     )
     assert ordered
-    assert ordered[0] == "web_fetch"
+    assert ordered[0] == ("web_search" if "web_search" in selected else "web_fetch")
 
 
 def test_force_final_response_does_not_inject_available_now(tmp_path: Path) -> None:

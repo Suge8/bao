@@ -22,7 +22,6 @@ DEFAULT_PROFILE_ID = "default"
 PROFILE_AVATAR_KEYS = ("mochi", "bao", "comet", "plum", "kiwi")
 _PROFILE_ID_RE = re.compile(r"[^a-z0-9]+")
 _OPAQUE_PROFILE_ID_PREFIX = "prof-"
-_OPAQUE_PROFILE_ID_RE = re.compile(r"^prof-[0-9a-f]{12}$")
 _PROMPT_FILES = ("INSTRUCTIONS.md", "PERSONA.md", "HEARTBEAT.md")
 _REGISTRY_MUTEX = threading.RLock()
 
@@ -184,42 +183,6 @@ def _normalize_profile_id(value: object) -> str:
     return str(value or "").strip()
 
 
-def _is_opaque_profile_id(value: object) -> bool:
-    return bool(_OPAQUE_PROFILE_ID_RE.fullmatch(_normalize_profile_id(value)))
-
-
-def legacy_profile_id(
-    *,
-    current_profile_id: str,
-    item_profile_id: object = "",
-    snapshot_profile_id: object = "",
-) -> str:
-    normalized_item_id = _normalize_profile_id(item_profile_id)
-    if normalized_item_id and normalized_item_id != current_profile_id:
-        return normalized_item_id
-    normalized_snapshot_id = _normalize_profile_id(snapshot_profile_id)
-    if normalized_snapshot_id and normalized_snapshot_id != current_profile_id:
-        return normalized_snapshot_id
-    return ""
-
-
-def rewrite_profile_scoped_id(
-    value: object,
-    *,
-    legacy_profile_id: str,
-    profile_id: str,
-) -> str:
-    text = _normalize_profile_id(value)
-    if not text or not legacy_profile_id or legacy_profile_id == profile_id:
-        return text
-    if text == legacy_profile_id:
-        return profile_id
-    legacy_prefix = f"{legacy_profile_id}:"
-    if text.startswith(legacy_prefix):
-        return f"{profile_id}:{text[len(legacy_prefix):]}"
-    return text
-
-
 def _normalize_profile_spec(
     raw: dict[str, Any], *, fallback_name: str, used_avatar_keys: set[str]
 ) -> ProfileSpec:
@@ -229,7 +192,7 @@ def _normalize_profile_spec(
         fallback=fallback_name,
     )
     storage_key = sanitize_profile_storage_key(
-        str(raw.get("storage_key") or raw.get("storageKey") or profile_id),
+        str(raw.get("storage_key") or raw.get("storageKey") or display_name or profile_id),
     )
     avatar_key = _normalize_avatar_key(raw.get("avatar_key") or raw.get("avatarKey"))
     if not avatar_key:
@@ -500,43 +463,13 @@ def _load_profile_registry(path: Path) -> tuple[ProfileRegistry, bool]:
         return _default_registry(), True
     if not isinstance(raw, dict):
         return _default_registry(), True
-    loaded_registry = _make_registry(raw)
-    registry = _migrate_legacy_profile_ids(loaded_registry)
+    registry = _make_registry(raw)
     raw_profiles = raw.get("profiles")
     needs_save = any(
         isinstance(item, dict) and "storage_key" not in item and "storageKey" not in item
         for item in (raw_profiles if isinstance(raw_profiles, list) else [])
     )
-    return registry, needs_save or registry != loaded_registry
-
-
-def _migrate_legacy_profile_ids(registry: ProfileRegistry) -> ProfileRegistry:
-    stable_ids = {
-        spec.id
-        for spec in registry.profiles
-        if spec.id == DEFAULT_PROFILE_ID or _is_opaque_profile_id(spec.id)
-    }
-    id_map: dict[str, str] = {}
-    next_profiles: list[ProfileSpec] = []
-    changed = False
-    for spec in registry.profiles:
-        if spec.id == DEFAULT_PROFILE_ID or _is_opaque_profile_id(spec.id):
-            stable_ids.add(spec.id)
-            next_profiles.append(spec)
-            continue
-        next_id = _generate_profile_id(stable_ids)
-        stable_ids.add(next_id)
-        id_map[spec.id] = next_id
-        next_profiles.append(_replace_profile_spec(spec, profile_id=next_id))
-        changed = True
-    if not changed:
-        return registry
-    return ProfileRegistry(
-        version=PROFILE_REGISTRY_VERSION,
-        default_profile_id=id_map.get(registry.default_profile_id, registry.default_profile_id),
-        active_profile_id=id_map.get(registry.active_profile_id, registry.active_profile_id),
-        profiles=tuple(next_profiles),
-    )
+    return registry, needs_save
 
 
 def _resolve_profile_spec(profile_id: str, registry: ProfileRegistry) -> ProfileSpec:

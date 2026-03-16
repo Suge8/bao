@@ -105,6 +105,9 @@ def test_list_sessions_only_opens_meta_table(tmp_path: Path) -> None:
     from bao.session.manager import SessionManager
 
     opened: list[str] = []
+    legacy_dir = tmp_path / "sessions"
+    legacy_dir.mkdir(parents=True, exist_ok=True)
+    (legacy_dir / "desktop_local.jsonl").write_text('{"role":"assistant","content":"legacy"}\n', encoding="utf-8")
 
     def fake_open_or_create(
         _db: object, name: str, _sample: list[dict[str, object]]
@@ -115,16 +118,11 @@ def test_list_sessions_only_opens_meta_table(tmp_path: Path) -> None:
     with (
         patch("bao.session.manager.get_db", return_value=object()) as get_db,
         patch("bao.session.manager.open_or_create_table", side_effect=fake_open_or_create),
-        patch.object(SessionManager, "_migrate_legacy", autospec=True) as migrate,
     ):
         sm = SessionManager(tmp_path)
         assert sm.list_sessions() == []
         get_db.assert_called_once_with(tmp_path)
         assert opened == ["session_meta"]
-        migrate.assert_called_once()
-        assert migrate.call_args.args[0] is sm
-        assert migrate.call_args.args[1] == tmp_path
-        assert migrate.call_args.args[2].name == "session_meta"
 
 
 def test_session_add_message_keeps_runtime_flags_untouched() -> None:
@@ -289,7 +287,6 @@ def test_get_or_create_missing_session_keeps_messages_table_lazy(tmp_path: Path)
     with (
         patch("bao.session.manager.get_db", return_value=object()),
         patch("bao.session.manager.open_or_create_table", side_effect=fake_open_or_create),
-        patch.object(SessionManager, "_migrate_legacy", autospec=True),
     ):
         sm = SessionManager(tmp_path)
         session = sm.get_or_create("desktop:local::missing")
@@ -312,7 +309,6 @@ def test_save_empty_session_keeps_messages_table_lazy(tmp_path: Path) -> None:
     with (
         patch("bao.session.manager.get_db", return_value=object()),
         patch("bao.session.manager.open_or_create_table", side_effect=fake_open_or_create),
-        patch.object(SessionManager, "_migrate_legacy", autospec=True),
     ):
         sm = SessionManager(tmp_path)
         sm.save(Session("desktop:local::empty"))
@@ -335,7 +331,6 @@ def test_creating_new_tables_builds_indexes_once(tmp_path: Path) -> None:
     with (
         patch("bao.session.manager.get_db", return_value=object()),
         patch("bao.session.manager.open_or_create_table", side_effect=fake_open_or_create),
-        patch.object(SessionManager, "_migrate_legacy", autospec=True),
     ):
         sm = SessionManager(tmp_path)
         sm.list_sessions()
@@ -823,7 +818,7 @@ def test_list_sessions_waits_for_inflight_save_metadata_rewrite(tmp_path: Path) 
     listed_sessions = _list_sessions_while_meta_delete_is_blocked(sm, key, save_thread)
 
     assert [item["key"] for item in listed_sessions] == [key]
-    assert listed_sessions[0]["metadata"]["title"] == "updated"
+    assert listed_sessions[0]["metadata"]["view"]["title"] == "updated"
 
 
 def test_list_sessions_waits_for_inflight_metadata_only_rewrite(tmp_path: Path) -> None:
@@ -845,7 +840,10 @@ def test_list_sessions_waits_for_inflight_metadata_only_rewrite(tmp_path: Path) 
     listed_sessions = _list_sessions_while_meta_delete_is_blocked(sm, key, update_thread)
 
     assert [item["key"] for item in listed_sessions] == [key]
-    assert listed_sessions[0]["metadata"]["desktop_last_seen_ai_at"] == "2026-01-01T00:00:00"
+    assert (
+        listed_sessions[0]["metadata"]["view"]["read_receipts"]["last_seen_ai_at"]
+        == "2026-01-01T00:00:00"
+    )
 
 
 def test_update_metadata_only_keyword_path_uses_same_meta_barrier(tmp_path: Path) -> None:
@@ -868,7 +866,10 @@ def test_update_metadata_only_keyword_path_uses_same_meta_barrier(tmp_path: Path
     listed_sessions = _list_sessions_while_meta_delete_is_blocked(sm, key, update_thread)
 
     assert [item["key"] for item in listed_sessions] == [key]
-    assert listed_sessions[0]["metadata"]["desktop_last_seen_ai_at"] == "2026-01-02T00:00:00"
+    assert (
+        listed_sessions[0]["metadata"]["view"]["read_receipts"]["last_seen_ai_at"]
+        == "2026-01-02T00:00:00"
+    )
 
 
 def test_resolve_active_session_key_prefers_existing_family_sibling(tmp_path: Path) -> None:
@@ -940,7 +941,10 @@ def test_mark_desktop_seen_ai_clears_running_before_visible_metadata_refresh(
     listed_sessions = _list_sessions_while_meta_delete_is_blocked(sm, key, update_thread)
 
     assert [item["key"] for item in listed_sessions] == [key]
-    assert isinstance(listed_sessions[0]["metadata"]["desktop_last_seen_ai_at"], str)
+    assert isinstance(
+        listed_sessions[0]["metadata"]["view"]["read_receipts"]["last_seen_ai_at"],
+        str,
+    )
     assert listed_sessions[0]["metadata"].get("session_running") is None
 
 
@@ -975,7 +979,7 @@ def test_mark_desktop_turn_completed_clears_running_and_marks_seen(tmp_path: Pat
 
     listed = {item["key"]: item for item in sm.list_sessions()}
     assert listed[key]["metadata"].get("session_running") is None
-    assert isinstance(listed[key]["metadata"].get("desktop_last_seen_ai_at"), str)
+    assert isinstance(listed[key]["metadata"]["view"]["read_receipts"].get("last_seen_ai_at"), str)
 
 
 def test_mark_desktop_seen_ai_if_active_ignores_inactive_session(tmp_path: Path) -> None:

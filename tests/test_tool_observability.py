@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from bao.agent.loop import AgentLoop
-from bao.bus.events import InboundMessage
+from bao.bus.events import ControlEvent, InboundMessage
 from bao.bus.queue import MessageBus
 from bao.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 
@@ -78,6 +78,68 @@ def test_run_agent_loop_collects_tool_observability(tmp_path: Path) -> None:
     assert obs["tool_selection_hit_rate"] == 0.0
     assert obs["parameter_fill_success_rate"] == 0.5
     assert obs["retry_rate_proxy"] == 0.5
+
+
+def test_run_agent_loop_tracks_approval_required_errors(tmp_path: Path) -> None:
+    class ApprovalProvider(LLMProvider):
+        def __init__(self) -> None:
+            super().__init__(api_key=None, api_base=None)
+            self._calls = 0
+
+        async def chat(
+            self,
+            messages: list[dict[str, Any]],
+            tools: list[dict[str, Any]] | None = None,
+            model: str | None = None,
+            max_tokens: int = 4096,
+            temperature: float = 0.7,
+            on_progress=None,
+            **kwargs: Any,
+        ) -> LLMResponse:
+            del messages, tools, model, max_tokens, temperature, on_progress, kwargs
+            if self._calls == 0:
+                self._calls += 1
+                return LLMResponse(
+                    content="tools",
+                    tool_calls=[
+                        ToolCallRequest(
+                            id="tc-approval",
+                            name="exec",
+                            arguments={"command": "echo hi"},
+                        )
+                    ],
+                    finish_reason="tool_calls",
+                )
+            self._calls += 1
+            return LLMResponse(content="done", finish_reason="stop")
+
+        def get_default_model(self) -> str:
+            return "dummy/model"
+
+    loop = AgentLoop(
+        bus=MessageBus(),
+        provider=ApprovalProvider(),
+        workspace=tmp_path,
+        max_iterations=3,
+    )
+    loop._tool_exposure_mode = "off"
+
+    final_content, tools_used, _, _, _ = asyncio.run(
+        loop._run_agent_loop(
+            initial_messages=[
+                {"role": "system", "content": "test"},
+                {"role": "user", "content": "先打个招呼"},
+            ]
+        )
+    )
+
+    assert final_content == "done"
+    assert tools_used == ["exec"]
+    obs = loop._last_tool_observability
+    assert obs["tool_calls_total"] == 1
+    assert obs["tool_calls_error"] == 1
+    assert obs["approval_required_errors"] == 1
+    assert obs["execution_errors"] == 0
 
 
 def test_interrupted_tool_call_not_counted_as_ok(tmp_path: Path) -> None:
@@ -266,17 +328,7 @@ def test_process_system_message_localizes_blank_final_fallback(tmp_path: Path) -
         sender_id="subagent",
         chat_id="imessage:+86100",
         content="",
-        metadata={
-            "session_key": "imessage:+86100",
-            "system_event": {
-                "type": "subagent_result",
-                "task_id": "task-1",
-                "label": "research",
-                "task": "整理重复消息问题",
-                "status": "ok",
-                "result": "done",
-            },
-        },
+        metadata={"session_key": "imessage:+86100"},
     )
 
     out = asyncio.run(loop._process_system_message(msg))
@@ -311,25 +363,23 @@ def test_process_system_message_error_event_uses_same_summary_path(tmp_path: Pat
 
     setattr(loop, "_run_agent_loop", _fake_run_agent_loop)
 
-    msg = InboundMessage(
-        channel="system",
-        sender_id="subagent",
-        chat_id="imessage:+86100",
-        content="",
-        metadata={
-            "session_key": "imessage:+86100",
-            "system_event": {
-                "type": "subagent_result",
-                "task_id": "task-2",
-                "label": "repair",
-                "task": "处理失败路径",
-                "status": "error",
-                "result": "tool failed",
-            },
+    event = ControlEvent(
+        kind="subagent_result",
+        session_key="imessage:+86100",
+        origin_channel="imessage",
+        origin_chat_id="+86100",
+        metadata={"session_key": "imessage:+86100"},
+        payload={
+            "type": "subagent_result",
+            "task_id": "task-2",
+            "label": "repair",
+            "task": "处理失败路径",
+            "status": "error",
+            "result": "tool failed",
         },
     )
 
-    out = asyncio.run(loop._process_system_message(msg))
+    out = asyncio.run(loop._process_control_event(event))
     assert out is not None
     assert out.content == "任务失败，请稍后再试。"
     assert "system_event" not in out.metadata
@@ -345,7 +395,7 @@ def test_process_system_message_error_event_uses_same_summary_path(tmp_path: Pat
     assert persisted[0].get("_source") is None
 
 
-def test_process_system_message_malformed_event_falls_back_to_content(tmp_path: Path) -> None:
+def test_process_system_message_uses_content_directly(tmp_path: Path) -> None:
     (tmp_path / "INSTRUCTIONS.md").write_text("ready", encoding="utf-8")
     (tmp_path / "PERSONA.md").write_text("ready", encoding="utf-8")
 
@@ -371,15 +421,7 @@ def test_process_system_message_malformed_event_falls_back_to_content(tmp_path: 
         sender_id="subagent",
         chat_id="imessage:+86100",
         content="legacy system payload",
-        metadata={
-            "session_key": "imessage:+86100",
-            "system_event": {
-                "type": "subagent_result",
-                "label": "repair",
-                "status": "ok",
-                "result": "missing task should disable event parsing",
-            },
-        },
+        metadata={"session_key": "imessage:+86100"},
     )
 
     out = asyncio.run(loop._process_system_message(msg))

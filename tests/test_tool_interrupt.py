@@ -3,6 +3,7 @@
 import asyncio
 import importlib
 
+from bao.agent.session_run_controller import SessionRunController
 from bao.agent.tool_result import ToolExecutionResult
 
 pytest = importlib.import_module("pytest")
@@ -15,7 +16,7 @@ async def test_await_tool_with_interrupt_cancels_long_tool():
     from bao.agent.loop import AgentLoop
 
     loop = AgentLoop.__new__(AgentLoop)
-    loop._interrupted_tasks = set()
+    loop._session_runs = SessionRunController()
 
     cancelled = asyncio.Event()
 
@@ -33,7 +34,7 @@ async def test_await_tool_with_interrupt_cancels_long_tool():
 
     async def interrupt_after_start():
         await asyncio.sleep(0.05)
-        loop._interrupted_tasks.add(run_task)
+        loop._session_runs._interrupted_tasks.add(run_task)
 
     asyncio.create_task(interrupt_after_start())
 
@@ -52,7 +53,7 @@ async def test_await_tool_with_interrupt_no_interrupt_returns_normally():
     from bao.agent.loop import AgentLoop
 
     loop = AgentLoop.__new__(AgentLoop)
-    loop._interrupted_tasks = set()
+    loop._session_runs = SessionRunController()
 
     async def quick_tool():
         return "tool output"
@@ -70,7 +71,7 @@ async def test_await_tool_with_interrupt_outer_cancel_cleans_up():
     from bao.agent.loop import AgentLoop
 
     loop = AgentLoop.__new__(AgentLoop)
-    loop._interrupted_tasks = set()
+    loop._session_runs = SessionRunController()
 
     async def long_tool():
         await asyncio.sleep(60)
@@ -96,7 +97,7 @@ async def test_await_tool_with_interrupt_swallowed_cancel_bounded_wait():
     from bao.agent.loop import AgentLoop
 
     loop = AgentLoop.__new__(AgentLoop)
-    loop._interrupted_tasks = set()
+    loop._session_runs = SessionRunController()
 
     async def stubborn_tool():
         try:
@@ -112,7 +113,7 @@ async def test_await_tool_with_interrupt_swallowed_cancel_bounded_wait():
 
     async def interrupt_after_start():
         await asyncio.sleep(0.05)
-        loop._interrupted_tasks.add(run_task)
+        loop._session_runs._interrupted_tasks.add(run_task)
 
     asyncio.create_task(interrupt_after_start())
 

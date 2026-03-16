@@ -1119,7 +1119,6 @@ class MemoryStore:
         self._pending_hit_updates: dict[str, dict[str, Any]] = {}
         self._hit_stats_lock = threading.Lock()
         self._hit_flush_inflight = False
-        self._migrate_legacy(workspace)
         self._migrate_long_term_facts()
         self._init_domains()
         if embedding_config and getattr(embedding_config, "enabled", False):
@@ -1872,22 +1871,6 @@ class MemoryStore:
                 return
             self._delete_vector_by_key(key)
             self._vec_tbl.add([{"key": key, "content": content, "type": type_, "vector": vec}])
-
-    def _migrate_legacy(self, workspace: Path) -> None:
-        mem_file = workspace / "memory" / "MEMORY.md"
-        hist_file = workspace / "memory" / "HISTORY.md"
-        if mem_file.exists():
-            existing = self._tbl.search().where("type = 'long_term'").limit(1).to_list()
-            if not existing:
-                self.write_long_term(mem_file.read_text(encoding="utf-8"))
-            mem_file.rename(mem_file.with_suffix(".md.migrated"))
-        if hist_file.exists():
-            existing = self._tbl.search().where("type = 'history'").limit(1).to_list()
-            if not existing:
-                for entry in hist_file.read_text(encoding="utf-8").strip().split("\n\n"):
-                    if entry.strip():
-                        self.append_history(entry.strip())
-            hist_file.rename(hist_file.with_suffix(".md.migrated"))
 
     def _make_row(self, *, key: str, content: str, type_: str, **extra) -> dict[str, Any]:
         """Build a row with all required columns, filling defaults."""

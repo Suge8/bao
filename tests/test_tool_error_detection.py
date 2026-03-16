@@ -159,3 +159,21 @@ def test_parse_tool_error_invalid_params() -> None:
     assert info is not None
     assert info.is_error is True
     assert info.category == "invalid_params"
+
+
+def test_parse_tool_error_structured_approval_required() -> None:
+    from bao.agent.shared import parse_tool_error
+
+    info = parse_tool_error(
+        "notify",
+        ToolExecutionResult.error(
+            code="approval_required",
+            message="Tool requires explicit user approval",
+            value="Blocked tool 'notify'",
+        ),
+        _ERROR_KEYWORDS,
+    )
+
+    assert info is not None
+    assert info.is_error is True
+    assert info.category == "approval_required"

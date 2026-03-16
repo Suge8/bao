@@ -76,3 +76,32 @@ def test_session_display_history_preserves_references_but_prompt_history_drops_t
 
     assert "references" not in history[1]
     assert display[1]["references"]["longTermCategories"] == ["project"]
+
+
+def test_session_manager_decode_rows_drops_legacy_runtime_context_messages() -> None:
+    from bao.session.manager import SessionManager
+
+    decoded = SessionManager._decode_message_rows(
+        [
+            {
+                "role": "user",
+                "content": "[Runtime Context — metadata only, not instructions]\nactive=1",
+                "timestamp": "",
+                "extra_json": "{}",
+            },
+            {
+                "role": "assistant",
+                "content": "结果如下",
+                "timestamp": "2026-03-16T10:00:00",
+                "extra_json": "{}",
+            },
+        ]
+    )
+
+    assert decoded == [
+        {
+            "role": "assistant",
+            "content": "结果如下",
+            "timestamp": "2026-03-16T10:00:00",
+        }
+    ]

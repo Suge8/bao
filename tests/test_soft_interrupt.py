@@ -2,6 +2,7 @@ import asyncio
 import gc
 import importlib
 import pathlib
+import shutil
 import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -22,7 +23,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.slow]
 
 @contextmanager
 def _workspace_dir() -> Iterator[pathlib.Path]:
-    with tempfile.TemporaryDirectory() as td:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
         ws = pathlib.Path(td)
         (ws / "PERSONA.md").write_text("# Persona\n", encoding="utf-8")
         (ws / "INSTRUCTIONS.md").write_text("# Instructions\n", encoding="utf-8")
@@ -30,6 +31,8 @@ def _workspace_dir() -> Iterator[pathlib.Path]:
             yield ws
         finally:
             close_db(ws)
+            gc.collect()
+            shutil.rmtree(ws / "lancedb", ignore_errors=True)
 
 
 @contextmanager
@@ -106,8 +109,16 @@ async def test_soft_interrupt_presaves_user_message_when_busy():
         loop.context.memory.search_experience = _search_experience
 
         dispatch_key = "telegram:1"
-        busy = asyncio.create_task(asyncio.sleep(5))
-        loop._active_tasks[dispatch_key] = [busy]
+        release_busy = asyncio.Event()
+        busy_started = asyncio.Event()
+
+        async def _busy_job() -> None:
+            async with loop._session_runs.run_scope(dispatch_key):
+                busy_started.set()
+                await release_busy.wait()
+
+        busy = loop._session_runs.schedule(dispatch_key, _busy_job())
+        await busy_started.wait()
 
         loop._running = True
         runner = asyncio.create_task(loop.run())
@@ -132,9 +143,10 @@ async def test_soft_interrupt_presaves_user_message_when_busy():
             assert presaved is not None
             token = presaved.get("_pre_saved_token")
             assert isinstance(token, str) and token
-            assert loop._session_generations.get(dispatch_key, 0) >= 1
+            assert loop._session_runs.generation(dispatch_key) >= 1
         finally:
             loop._running = False
+            release_busy.set()
             busy.cancel()
             runner.cancel()
             await asyncio.gather(busy, runner, return_exceptions=True)

@@ -7,7 +7,7 @@ import re
 import shlex
 import uuid
 from contextlib import AsyncExitStack
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Literal, cast, overload
@@ -29,6 +29,7 @@ from bao.agent.run_controller import (
     apply_pre_iteration_checks,
     build_error_feedback,
 )
+from bao.agent.session_run_controller import SessionRunController
 from bao.agent.subagent import SubagentManager
 from bao.agent.tool_exposure import ToolExposureSnapshot
 from bao.agent.tool_result import ToolExecutionResult, tool_reply_contribution, tool_result_payload
@@ -282,6 +283,7 @@ class _ToolObservabilityCounters:
     tool_calls_ok: int = 0
     invalid_parameter_errors: int = 0
     tool_not_found_errors: int = 0
+    approval_required_errors: int = 0
     execution_errors: int = 0
     interrupted_tool_calls: int = 0
     retry_attempts_proxy: int = 0
@@ -298,6 +300,22 @@ class _ProcessMessageRunResult:
     interrupted: bool
     completed_tool_msgs: list[dict[str, Any]]
     reply_attachments: list[dict[str, Any]]
+
+
+@dataclass(frozen=True)
+class _BackgroundTurnInput:
+    session_key: str
+    origin_channel: str
+    origin_chat_id: str
+    system_prompt_text: str
+    search_query: str
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class _TurnExecutionOutcome:
+    parsed_result: _ProcessMessageRunResult
+    final_content: str
 
 
 def _extract_text(content: Any) -> str:
@@ -486,12 +504,8 @@ class AgentLoop:
         self._mcp_connect_succeeded = False
         self._mcp_connecting = False
         self._consolidating: set[str] = set()  # Session keys with consolidation in progress
-        self._active_tasks: dict[str, list[asyncio.Task[None]]] = {}  # session_key -> tasks
-        self._session_locks: dict[str, asyncio.Lock] = {}
-        self._session_generations: dict[str, int] = {}
-        self._session_running_task: dict[str, asyncio.Task[None]] = {}
+        self._session_runs = SessionRunController()
         self._run_task: asyncio.Task[None] | None = None
-        self._interrupted_tasks: set[asyncio.Task[None]] = set()
         self._title_generation_inflight: set[str] = set()
         self._last_tool_budget: dict[str, int] = {
             "offloaded_count": 0,
@@ -1617,7 +1631,7 @@ class AgentLoop:
             return await tool_task
         try:
             while not tool_task.done():
-                if current_task_ref in self._interrupted_tasks:
+                if self._session_runs.is_interrupted(current_task_ref):
                     if tool_task.done():
                         return await tool_task
                     tool_task.cancel()
@@ -1719,7 +1733,7 @@ class AgentLoop:
         )
 
     def _is_soft_interrupted(self, current_task_ref: asyncio.Task[None] | None) -> bool:
-        return current_task_ref is not None and current_task_ref in self._interrupted_tasks
+        return self._session_runs.is_interrupted(current_task_ref)
 
     async def _apply_pre_iteration_checks(
         self,
@@ -1814,7 +1828,7 @@ class AgentLoop:
         if current_task_ref is not None and stream_progress is not None:
 
             async def _interruptable_progress(chunk: str, _orig=stream_progress) -> None:
-                if current_task_ref in self._interrupted_tasks:
+                if self._session_runs.is_interrupted(current_task_ref):
                     from bao.providers.retry import StreamInterruptedError
 
                     raise StreamInterruptedError("soft interrupt during streaming")
@@ -2026,6 +2040,7 @@ class AgentLoop:
                     self.tools.execute,
                     raw_arguments=tool_call.raw_arguments,
                     argument_parse_error=tool_call.argument_parse_error,
+                    approval_context={"user_text": self._latest_user_text(messages)},
                 )
                 tool_task = asyncio.create_task(
                     self.tools.execute(tool_call.name, tool_call.arguments, **execute_kwargs)
@@ -2045,6 +2060,8 @@ class AgentLoop:
                     counters.invalid_parameter_errors += 1
                 elif _tool_err.category == "tool_not_found":
                     counters.tool_not_found_errors += 1
+                elif _tool_err.category == "approval_required":
+                    counters.approval_required_errors += 1
                 elif _tool_err.category == "execution_error":
                     counters.execution_errors += 1
                 elif _tool_err.category == "interrupted":
@@ -2249,6 +2266,7 @@ class AgentLoop:
             "tool_calls_error": tool_calls_error,
             "invalid_parameter_errors": counters.invalid_parameter_errors,
             "tool_not_found_errors": counters.tool_not_found_errors,
+            "approval_required_errors": counters.approval_required_errors,
             "execution_errors": counters.execution_errors,
             "interrupted_tool_calls": counters.interrupted_tool_calls,
             "retry_attempts_proxy": counters.retry_attempts_proxy,
@@ -2598,27 +2616,7 @@ class AgentLoop:
         return "control", control_task.result()
 
     def _schedule_session_task(self, dispatch_key: str, coro: Awaitable[None]) -> None:
-        task = asyncio.create_task(coro)
-        self._active_tasks.setdefault(dispatch_key, []).append(task)
-        self._session_locks.setdefault(dispatch_key, asyncio.Lock())
-
-        def _on_done(t: asyncio.Task[None], k: str = dispatch_key) -> None:
-            task_list = self._active_tasks.get(k)
-            if not task_list:
-                self._interrupted_tasks.discard(t)
-                return
-            try:
-                task_list.remove(t)
-            except ValueError:
-                self._interrupted_tasks.discard(t)
-                return
-            self._interrupted_tasks.discard(t)
-            if not task_list:
-                self._active_tasks.pop(k, None)
-                self._session_locks.pop(k, None)
-                self._session_running_task.pop(k, None)
-
-        task.add_done_callback(_on_done)
+        self._session_runs.schedule(dispatch_key, coro)
 
     async def run(self) -> None:
         """Run the agent loop, dispatching messages as tasks to stay responsive to /stop."""
@@ -2660,20 +2658,16 @@ class AgentLoop:
                     await self._handle_stop(msg)
                 else:
                     session_key = self._dispatch_session_key(msg)
-
-                    task_list = self._active_tasks.get(session_key, [])
-                    busy_tasks = [t for t in task_list if not t.done()]
-                    if busy_tasks:
-                        self._session_generations[session_key] = (
-                            self._session_generations.get(session_key, 0) + 1
-                        )
-                        for t in busy_tasks:
-                            self._interrupted_tasks.add(t)
-
-                        running_task = self._session_running_task.get(session_key)
-                        if running_task and not running_task.done():
-                            self._interrupted_tasks.add(running_task)
-
+                    resolve_mode = getattr(
+                        cast(Any, self.provider), "_resolve_effective_mode", None
+                    )
+                    interrupt_request = self._session_runs.request_interrupt(
+                        session_key,
+                        cancel_running=bool(
+                            callable(resolve_mode) and resolve_mode() == "responses"
+                        ),
+                    )
+                    if interrupt_request.has_busy_work:
                         cmd = (msg.content or "").strip().lower()
                         if msg.channel != "system" and not cmd.startswith("/"):
                             natural_key = msg.session_key
@@ -2692,18 +2686,8 @@ class AgentLoop:
                             )
                             self.sessions.save(session)
                             msg.metadata["_pre_saved"] = True
-
-                        resolve_mode = getattr(
-                            cast(Any, self.provider), "_resolve_effective_mode", None
-                        )
-                        if callable(resolve_mode) and resolve_mode() == "responses":
-                            for t in busy_tasks:
-                                if not t.done():
-                                    t.cancel()
-
                         logger.debug("Soft interrupt requested for busy session {}", session_key)
-
-                    task_gen = self._session_generations.get(session_key, 0)
+                    task_gen = self._session_runs.generation(session_key)
                     self._schedule_session_task(
                         session_key,
                         self._dispatch(msg, task_generation=task_gen, dispatch_key=session_key),
@@ -2723,20 +2707,7 @@ class AgentLoop:
         cancelled = 0
         sub_cancelled = 0
         for target_key in target_keys:
-            self._session_generations[target_key] = self._session_generations.get(target_key, 0) + 1
-
-            running_task = self._session_running_task.pop(target_key, None)
-            if running_task:
-                self._interrupted_tasks.discard(running_task)
-
-            tasks = self._active_tasks.get(target_key, [])
-            for t in tasks:
-                self._interrupted_tasks.discard(t)
-            cancelled += sum(1 for t in tasks if not t.done() and t.cancel())
-            if not any(not t.done() for t in tasks):
-                self._active_tasks.pop(target_key, None)
-                self._session_locks.pop(target_key, None)
-
+            cancelled += self._session_runs.stop_session(target_key)
             sub_cancelled += await cast(Any, self.subagents).cancel_by_session(
                 target_key, wait=False
             )
@@ -2758,11 +2729,7 @@ class AgentLoop:
     async def _dispatch(
         self, msg: InboundMessage, *, task_generation: int, dispatch_key: str
     ) -> None:
-        lock = self._session_locks.setdefault(dispatch_key, asyncio.Lock())
-        async with lock:
-            current_task = asyncio.current_task()
-            if current_task:
-                self._session_running_task[dispatch_key] = current_task
+        async with self._session_runs.run_scope(dispatch_key) as _current_task:
             try:
                 sig = inspect.signature(self._process_message).parameters
                 kwargs: dict[str, Any] = {}
@@ -2772,7 +2739,7 @@ class AgentLoop:
                     kwargs["expected_generation_key"] = dispatch_key
                 response = await self._process_message(msg, **kwargs)
                 if response:
-                    if self._session_generations.get(dispatch_key, 0) != task_generation:
+                    if self._session_runs.is_stale(dispatch_key, task_generation):
                         logger.debug(
                             "Dropping stale response for session {} after /stop", dispatch_key
                         )
@@ -2797,7 +2764,7 @@ class AgentLoop:
                     retryable=False,
                     session_key=dispatch_key,
                 )
-                if self._session_generations.get(dispatch_key, 0) != task_generation:
+                if self._session_runs.is_stale(dispatch_key, task_generation):
                     logger.debug("Suppressing stale error response for session {}", dispatch_key)
                     return
                 await self.bus.publish_outbound(
@@ -2807,18 +2774,9 @@ class AgentLoop:
                         content=f"Sorry, I encountered an error: {str(e)}",
                     )
                 )
-            finally:
-                if current_task:
-                    self._interrupted_tasks.discard(current_task)
-                    if self._session_running_task.get(dispatch_key) is current_task:
-                        self._session_running_task.pop(dispatch_key, None)
 
     async def _dispatch_control(self, event: ControlEvent, *, dispatch_key: str) -> None:
-        lock = self._session_locks.setdefault(dispatch_key, asyncio.Lock())
-        async with lock:
-            current_task = asyncio.current_task()
-            if current_task:
-                self._session_running_task[dispatch_key] = current_task
+        async with self._session_runs.run_scope(dispatch_key) as _current_task:
             try:
                 response = await self._process_control_event(event)
                 if response:
@@ -2842,11 +2800,6 @@ class AgentLoop:
                     session_key=dispatch_key,
                     details={"kind": event.kind, "source": event.source},
                 )
-            finally:
-                if current_task:
-                    self._interrupted_tasks.discard(current_task)
-                    if self._session_running_task.get(dispatch_key) is current_task:
-                        self._session_running_task.pop(dispatch_key, None)
 
     async def close_mcp(self) -> None:
         if self._mcp_stack:
@@ -3133,7 +3086,7 @@ class AgentLoop:
     ) -> bool:
         if expected_generation is None:
             return False
-        if self._session_generations.get(generation_key, 0) == expected_generation:
+        if not self._session_runs.is_stale(generation_key, expected_generation):
             return False
         logger.debug(log_message, generation_key)
         return True
@@ -3143,6 +3096,41 @@ class AgentLoop:
         if has_attachments:
             return "附件已准备好。" if session_lang != "en" else "The attachment is ready."
         return "处理完成。" if session_lang != "en" else "Completed."
+
+    def _current_plan_signal_text(self, session: Session) -> str:
+        return plan_state.plan_signal_text(session.metadata.get(plan_state.PLAN_STATE_KEY))
+
+    async def _execute_turn_loop(
+        self,
+        *,
+        initial_messages: list[dict[str, Any]],
+        session: Session,
+        session_lang: str,
+        fallback_text_fn: Callable[[str, bool], str],
+        on_progress: Callable[[str], Awaitable[None]] | None = None,
+        on_tool_hint: Callable[[str], Awaitable[None]] | None = None,
+        on_event: Callable[[StreamEvent], Awaitable[None]] | None = None,
+        on_visible_assistant_turn: Callable[[str], Awaitable[None]] | None = None,
+    ) -> _TurnExecutionOutcome:
+        run_result = await self._run_agent_loop(
+            initial_messages,
+            on_progress=on_progress,
+            on_tool_hint=on_tool_hint,
+            artifact_session_key=session.key,
+            return_interrupt=True,
+            tool_signal_text=self._current_plan_signal_text(session),
+            on_event=on_event,
+            on_visible_assistant_turn=on_visible_assistant_turn,
+            tool_hint_lang=session_lang,
+        )
+        parsed_result = self._unpack_process_message_run_result(cast(tuple[Any, ...], run_result))
+        final_content = parsed_result.final_content
+        if not isinstance(final_content, str) or not final_content.strip():
+            final_content = fallback_text_fn(session_lang, bool(parsed_result.reply_attachments))
+        return _TurnExecutionOutcome(
+            parsed_result=parsed_result,
+            final_content=final_content,
+        )
 
     async def _persist_assistant_turn(
         self,
@@ -3221,8 +3209,6 @@ class AgentLoop:
         session_key: str | None = None,
     ) -> tuple[dict[str, Any], str | None]:
         out_meta = dict(metadata or {})
-        out_meta.pop("control_event", None)
-        out_meta.pop("system_event", None)
         if session_key:
             out_meta["session_key"] = session_key
         reply_to = out_meta.get("reply_to") if isinstance(out_meta.get("reply_to"), str) else None
@@ -3569,28 +3555,20 @@ class AgentLoop:
                     )
                 )
 
-            return_interrupt_flag: bool = True
-            tool_signal_text = plan_state.plan_signal_text(
-                session.metadata.get(plan_state.PLAN_STATE_KEY)
-            )
-
             async def _persist_visible_assistant_turn(content: str) -> None:
                 await self._persist_display_only_assistant_turn(session=session, content=content)
 
-            run_result = await self._run_agent_loop(
-                initial_messages,
+            execution = await self._execute_turn_loop(
+                initial_messages=initial_messages,
+                session=session,
+                session_lang=session_lang,
+                fallback_text_fn=self._reply_fallback_text,
                 on_progress=on_progress or _bus_publish,
                 on_tool_hint=lambda c: _bus_publish(c, is_tool_hint=True),
-                artifact_session_key=session.key,
-                return_interrupt=return_interrupt_flag,
-                tool_signal_text=tool_signal_text,
                 on_event=on_event,
                 on_visible_assistant_turn=_persist_visible_assistant_turn,
-                tool_hint_lang=session_lang,
             )
-            parsed_result = self._unpack_process_message_run_result(
-                cast(tuple[Any, ...], run_result)
-            )
+            parsed_result = execution.parsed_result
 
             if parsed_result.interrupted:
                 self._handle_interrupted_process_message(
@@ -3605,16 +3583,10 @@ class AgentLoop:
                 expected_generation,
                 generation_key,
                 "Suppressing stale completion before persistence for session {}",
-            ):
+                ):
                 return None
 
-            final_content = parsed_result.final_content
-
-            if not isinstance(final_content, str) or not final_content.strip():
-                final_content = self._reply_fallback_text(
-                    session_lang,
-                    bool(parsed_result.reply_attachments),
-                )
+            final_content = execution.final_content
 
             assistant_status = "error" if parsed_result.provider_error else "done"
 
@@ -3675,10 +3647,7 @@ class AgentLoop:
 
     @staticmethod
     def _resolve_system_message_inputs(msg: InboundMessage) -> tuple[str, str]:
-        event = shared.parse_subagent_result_event(msg.metadata)
-        if not event:
-            return msg.content, msg.content
-        return AgentLoop._resolve_subagent_result_inputs(event)
+        return msg.content, msg.content
 
     @staticmethod
     def _resolve_subagent_result_inputs(
@@ -3700,10 +3669,51 @@ class AgentLoop:
         )
         return "\n\n".join(parts), event["task"]
 
-    def _background_turn_fallback_text(self, session_lang: str, *, has_attachments: bool) -> str:
+    def _background_turn_fallback_text(self, session_lang: str, has_attachments: bool) -> str:
         if has_attachments:
             return "后台附件已准备好。" if session_lang != "en" else "The background attachment is ready."
         return "后台任务已完成。" if session_lang != "en" else "Background task completed."
+
+    def _build_background_turn_from_subagent_result(
+        self,
+        event_payload: shared.SubagentResultEvent,
+        *,
+        session_key: str,
+        origin_channel: str,
+        origin_chat_id: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> _BackgroundTurnInput:
+        system_prompt_text, search_query = self._resolve_subagent_result_inputs(event_payload)
+        return _BackgroundTurnInput(
+            session_key=session_key,
+            origin_channel=origin_channel,
+            origin_chat_id=origin_chat_id,
+            system_prompt_text=system_prompt_text,
+            search_query=search_query,
+            metadata=dict(metadata or {}),
+        )
+
+    def _build_background_turn_from_system_message(
+        self,
+        msg: InboundMessage,
+    ) -> _BackgroundTurnInput:
+        origin_channel, origin_chat_id = self._resolve_system_message_origin(msg)
+        system_prompt_text, search_query = self._resolve_system_message_inputs(msg)
+        return _BackgroundTurnInput(
+            session_key=self._dispatch_session_key(msg),
+            origin_channel=origin_channel,
+            origin_chat_id=origin_chat_id,
+            system_prompt_text=system_prompt_text,
+            search_query=search_query,
+            metadata=dict(msg.metadata or {}),
+        )
+
+    @staticmethod
+    def _resolve_system_message_origin(msg: InboundMessage) -> tuple[str, str]:
+        if ":" in msg.chat_id:
+            origin_channel, origin_chat_id = msg.chat_id.split(":", 1)
+            return origin_channel, origin_chat_id
+        return "gateway", msg.chat_id
 
     def _finalize_background_turn(
         self,
@@ -3744,6 +3754,66 @@ class AgentLoop:
         self.sessions.save(session)
         return list(parsed_result.reply_attachments)
 
+    async def _execute_background_turn(
+        self,
+        turn_input: _BackgroundTurnInput,
+    ) -> OutboundMessage | None:
+        session = self.sessions.get_or_create(turn_input.session_key)
+        session_lang, lang_changed = self._resolve_session_language(session)
+        if lang_changed:
+            await asyncio.to_thread(self.sessions.save, session)
+        self._set_tool_context(
+            turn_input.origin_channel,
+            turn_input.origin_chat_id,
+            session_key=turn_input.session_key,
+            lang=session_lang,
+            metadata=turn_input.metadata,
+        )
+        recall = await self._recall_context_for_query(turn_input.search_query)
+        initial_messages = self.context.build_messages(
+            history=session.get_history(max_messages=self.memory_window),
+            current_message=turn_input.system_prompt_text,
+            channel=turn_input.origin_channel,
+            chat_id=turn_input.origin_chat_id,
+            long_term_memory=str(recall.get("long_term_memory") or ""),
+            related_memory=cast(list[Any], recall.get("related_memory") or None),
+            related_experience=cast(list[Any], recall.get("related_experience") or None),
+            model=self.model,
+            plan_state=session.metadata.get(plan_state.PLAN_STATE_KEY),
+        )
+        execution = await self._execute_turn_loop(
+            initial_messages=initial_messages,
+            session=session,
+            session_lang=session_lang,
+            fallback_text_fn=self._background_turn_fallback_text,
+        )
+        parsed_result = execution.parsed_result
+        if parsed_result.interrupted:
+            return None
+        final_content = execution.final_content
+        reply_attachments = self._finalize_background_turn(
+            session=session,
+            session_key=turn_input.session_key,
+            origin_channel=turn_input.origin_channel,
+            search_query=turn_input.search_query,
+            system_prompt_text=turn_input.system_prompt_text,
+            final_content=final_content,
+            parsed_result=parsed_result,
+            references=cast(dict[str, Any], recall.get("references") or {}),
+        )
+        out_meta, _ = self._prepare_outbound_metadata(
+            turn_input.metadata,
+            session_key=turn_input.session_key,
+        )
+        return self._build_control_outbound_message(
+            channel=turn_input.origin_channel,
+            chat_id=turn_input.origin_chat_id,
+            session_key=turn_input.session_key,
+            final_content=final_content,
+            metadata=out_meta,
+            reply_attachments=reply_attachments,
+        )
+
     async def _process_subagent_result_payload(
         self,
         event_payload: shared.SubagentResultEvent,
@@ -3753,153 +3823,20 @@ class AgentLoop:
         origin_chat_id: str,
         metadata: dict[str, Any] | None = None,
     ) -> OutboundMessage | None:
-        session = self.sessions.get_or_create(session_key)
-        session_lang, lang_changed = self._resolve_session_language(session)
-        if lang_changed:
-            await asyncio.to_thread(self.sessions.save, session)
-        self._set_tool_context(
-            origin_channel,
-            origin_chat_id,
-            session_key=session_key,
-            lang=session_lang,
-            metadata=metadata,
-        )
-        system_prompt_text, search_query = self._resolve_subagent_result_inputs(event_payload)
-        recall = await self._recall_context_for_query(search_query)
-        initial_messages = self.context.build_messages(
-            history=session.get_history(max_messages=self.memory_window),
-            current_message=system_prompt_text,
-            channel=origin_channel,
-            chat_id=origin_chat_id,
-            long_term_memory=str(recall.get("long_term_memory") or ""),
-            related_memory=cast(list[Any], recall.get("related_memory") or None),
-            related_experience=cast(list[Any], recall.get("related_experience") or None),
-            model=self.model,
-            plan_state=session.metadata.get(plan_state.PLAN_STATE_KEY),
-        )
-        parsed_result = self._unpack_process_message_run_result(
-            cast(
-                tuple[Any, ...],
-                await self._run_agent_loop(
-                    initial_messages,
-                    artifact_session_key=session.key,
-                    return_interrupt=True,
-                    tool_signal_text=plan_state.plan_signal_text(
-                        session.metadata.get(plan_state.PLAN_STATE_KEY)
-                    ),
-                    tool_hint_lang=session_lang,
-                ),
+        return await self._execute_background_turn(
+            self._build_background_turn_from_subagent_result(
+                event_payload,
+                session_key=session_key,
+                origin_channel=origin_channel,
+                origin_chat_id=origin_chat_id,
+                metadata=metadata,
             )
-        )
-        if parsed_result.interrupted:
-            return None
-        final_content = parsed_result.final_content
-        if not isinstance(final_content, str) or not final_content.strip():
-            final_content = self._background_turn_fallback_text(
-                session_lang,
-                has_attachments=bool(parsed_result.reply_attachments),
-            )
-        reply_attachments = self._finalize_background_turn(
-            session=session,
-            session_key=session_key,
-            origin_channel=origin_channel,
-            search_query=search_query,
-            system_prompt_text=system_prompt_text,
-            final_content=final_content,
-            parsed_result=parsed_result,
-            references=cast(dict[str, Any], recall.get("references") or {}),
-        )
-        out_meta, _ = self._prepare_outbound_metadata(metadata, session_key=session_key)
-        return self._build_control_outbound_message(
-            channel=origin_channel,
-            chat_id=origin_chat_id,
-            session_key=session_key,
-            final_content=final_content,
-            metadata=out_meta,
-            reply_attachments=reply_attachments,
         )
 
     async def _process_system_message(self, msg: InboundMessage) -> OutboundMessage | None:
         logger.info("📨 收到系统 / system in: {}", msg.sender_id)
-
-        if ":" in msg.chat_id:
-            origin_channel, origin_chat_id = msg.chat_id.split(":", 1)
-        else:
-            origin_channel, origin_chat_id = "gateway", msg.chat_id
-
-        parsed_event = shared.parse_subagent_result_event(msg.metadata)
-        if parsed_event is not None:
-            return await self._process_subagent_result_payload(
-                parsed_event,
-                session_key=self._dispatch_session_key(msg),
-                origin_channel=origin_channel,
-                origin_chat_id=origin_chat_id,
-                metadata=dict(msg.metadata or {}),
-            )
-
-        session_key = self._dispatch_session_key(msg)
-        session = self.sessions.get_or_create(session_key)
-        session_lang, lang_changed = self._resolve_session_language(session)
-        if lang_changed:
-            await asyncio.to_thread(self.sessions.save, session)
-        self._set_tool_context(
-            origin_channel,
-            origin_chat_id,
-            session_key=session_key,
-            lang=session_lang,
-            metadata=msg.metadata,
-        )
-        system_prompt_text, search_query = self._resolve_system_message_inputs(msg)
-        recall = await self._recall_context_for_query(search_query)
-        initial_messages = self.context.build_messages(
-            history=session.get_history(max_messages=self.memory_window),
-            current_message=system_prompt_text,
-            channel=origin_channel,
-            chat_id=origin_chat_id,
-            long_term_memory=str(recall.get("long_term_memory") or ""),
-            related_memory=cast(list[Any], recall.get("related_memory") or None),
-            related_experience=cast(list[Any], recall.get("related_experience") or None),
-            model=self.model,
-            plan_state=session.metadata.get(plan_state.PLAN_STATE_KEY),
-        )
-        return_interrupt_flag: bool = True
-        tool_signal_text = plan_state.plan_signal_text(
-            session.metadata.get(plan_state.PLAN_STATE_KEY)
-        )
-        run_result = await self._run_agent_loop(
-            initial_messages,
-            artifact_session_key=session.key,
-            return_interrupt=return_interrupt_flag,
-            tool_signal_text=tool_signal_text,
-            tool_hint_lang=session_lang,
-        )
-        parsed_result = self._unpack_process_message_run_result(cast(tuple[Any, ...], run_result))
-
-        final_content = parsed_result.final_content
-        if not isinstance(final_content, str) or not final_content.strip():
-            final_content = self._background_turn_fallback_text(
-                session_lang,
-                has_attachments=bool(parsed_result.reply_attachments),
-            )
-
-        out_meta, _ = self._prepare_outbound_metadata(msg.metadata, session_key=session_key)
-        reply_attachments = self._finalize_background_turn(
-            session=session,
-            session_key=session_key,
-            origin_channel=origin_channel,
-            search_query=search_query,
-            system_prompt_text=system_prompt_text,
-            final_content=final_content,
-            parsed_result=parsed_result,
-            references=cast(dict[str, Any], recall.get("references") or {}),
-        )
-        return self._build_control_outbound_message(
-            channel=origin_channel,
-            chat_id=origin_chat_id,
-            session_key=session_key,
-            final_content=final_content,
-            metadata=out_meta,
-            reply_attachments=reply_attachments,
+        return await self._execute_background_turn(
+            self._build_background_turn_from_system_message(msg)
         )
 
     @staticmethod

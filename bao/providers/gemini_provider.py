@@ -2,20 +2,15 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 from typing import Any, Awaitable, Callable, cast
 
 from google import genai
 from google.genai import types
 
-from bao.providers.base import LLMProvider, LLMResponse, ToolCallRequest
-from bao.providers.retry import (
-    ProgressCallbackError,
-    StreamInterruptedError,
-    emit_progress,
-    safe_error_text,
-)
+from bao.providers.base import LLMProvider, LLMResponse, ProviderCapabilitySnapshot, ToolCallRequest
+from bao.providers.retry import emit_progress
+from bao.providers.runtime import ProviderRuntimeExecutor
 
 
 class GeminiProvider(LLMProvider):
@@ -49,6 +44,21 @@ class GeminiProvider(LLMProvider):
         if "/" in model:
             return model.split("/", 1)[1]
         return model
+
+    def get_capability_snapshot(self, model: str | None = None) -> ProviderCapabilitySnapshot:
+        resolved_model = self._resolve_model(model or self.default_model)
+        supports_thinking = resolved_model.startswith("gemini-2.5")
+        return ProviderCapabilitySnapshot(
+            provider_name="gemini",
+            default_api_mode="generate_content",
+            supported_api_modes=("generate_content",),
+            supports_streaming=True,
+            supports_tools=True,
+            supports_reasoning_effort=True,
+            supports_service_tier=False,
+            supports_prompt_caching=False,
+            supports_thinking=supports_thinking,
+        )
 
     @staticmethod
     def _thinking_budget_from_effort(reasoning_effort: str | None) -> int | None:
@@ -279,7 +289,13 @@ class GeminiProvider(LLMProvider):
             )
 
         content = ""
-        try:
+        executor = ProviderRuntimeExecutor(
+            "gemini",
+            partial_content=lambda: content or None,
+        )
+
+        async def _run_once() -> LLMResponse:
+            nonlocal content
             content = ""
             tool_calls: list[ToolCallRequest] = []
             reasoning_content: str | None = None
@@ -297,10 +313,7 @@ class GeminiProvider(LLMProvider):
                 for part in candidate.content.parts:
                     if part.text:
                         content += part.text
-                        try:
-                            await emit_progress(on_progress, part.text)
-                        except StreamInterruptedError:
-                            return LLMResponse(content=content or None, finish_reason="interrupted")
+                        await emit_progress(on_progress, part.text)
                     if getattr(part, "thought", None):
                         reasoning_content = (reasoning_content or "") + str(part.thought)
                     if part.function_call:
@@ -341,21 +354,12 @@ class GeminiProvider(LLMProvider):
                 usage=usage,
                 reasoning_content=reasoning_content,
             )
-        except asyncio.CancelledError:
-            raise
-        except ProgressCallbackError as exc:
-            if isinstance(exc, StreamInterruptedError):
-                return LLMResponse(content=content or None, finish_reason="interrupted")
-            cause = exc.__cause__ or exc
-            return LLMResponse(
-                content=f"Error calling Gemini progress callback: {safe_error_text(cause)}",
-                finish_reason="error",
-            )
-        except Exception as e:
-            return LLMResponse(
-                content=f"Error calling Gemini: {str(e)}",
-                finish_reason="error",
-            )
+        result = await executor.run(
+            _run_once,
+            error_prefix="Error calling Gemini",
+            progress_error_prefix="Error calling Gemini progress callback",
+        )
+        return result
 
     def _parse_response(self, response: Any) -> LLMResponse:
         """Parse Gemini response into LLMResponse."""

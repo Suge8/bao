@@ -88,7 +88,7 @@ def test_profile_registry_repairs_invalid_registry_file(fake_home: Path) -> None
     assert json.loads(registry_path.read_text(encoding="utf-8"))["default_profile_id"] == "default"
 
 
-def test_profile_registry_migrates_legacy_ids_and_backfills_storage_key(fake_home: Path) -> None:
+def test_profile_registry_backfills_storage_key_without_rewriting_ids(fake_home: Path) -> None:
     shared_workspace = fake_home / ".bao" / "workspace"
     shared_workspace.mkdir(parents=True, exist_ok=True)
     registry_path = fake_home / ".bao" / "profiles.json"
@@ -98,7 +98,7 @@ def test_profile_registry_migrates_legacy_ids_and_backfills_storage_key(fake_hom
             {
                 "version": 1,
                 "default_profile_id": "default",
-                "active_profile_id": "work",
+                "active_profile_id": "prof-123456789abc",
                 "profiles": [
                     {
                         "id": "default",
@@ -107,7 +107,7 @@ def test_profile_registry_migrates_legacy_ids_and_backfills_storage_key(fake_hom
                         "enabled": True,
                     },
                     {
-                        "id": "work",
+                        "id": "prof-123456789abc",
                         "display_name": "Work",
                         "avatar_key": "kiwi",
                         "enabled": True,
@@ -123,13 +123,13 @@ def test_profile_registry_migrates_legacy_ids_and_backfills_storage_key(fake_hom
 
     work_profile = next(profile for profile in registry.profiles if profile.display_name == "Work")
     assert registry.get("default").storage_key == "default"
-    assert re.fullmatch(r"prof-[0-9a-f]{12}", work_profile.id)
+    assert work_profile.id == "prof-123456789abc"
     assert work_profile.storage_key == "work"
-    assert registry.active_profile_id == work_profile.id
+    assert registry.active_profile_id == "prof-123456789abc"
     assert payload["profiles"][0]["storage_key"] == "default"
-    assert re.fullmatch(r"prof-[0-9a-f]{12}", payload["profiles"][1]["id"])
+    assert payload["profiles"][1]["id"] == "prof-123456789abc"
     assert payload["profiles"][1]["storage_key"] == "work"
-    assert payload["active_profile_id"] == work_profile.id
+    assert payload["active_profile_id"] == "prof-123456789abc"
 
 
 def test_profile_registry_backfills_empty_default_state_from_workspace(fake_home: Path) -> None:

@@ -56,6 +56,19 @@ class LLMResponse:
         return len(self.tool_calls) > 0
 
 
+@dataclass(frozen=True)
+class ProviderCapabilitySnapshot:
+    provider_name: str
+    default_api_mode: str = "native"
+    supported_api_modes: tuple[str, ...] = ("native",)
+    supports_streaming: bool = True
+    supports_tools: bool = True
+    supports_reasoning_effort: bool = False
+    supports_service_tier: bool = False
+    supports_prompt_caching: bool = False
+    supports_thinking: bool = False
+
+
 def normalize_tool_calls(message: Any) -> list[ToolCallRequest]:
     """Extract tool calls from any LLM response format (OpenAI/Legacy/Anthropic)."""
     tool_calls: list[ToolCallRequest] = []
@@ -147,3 +160,9 @@ class LLMProvider(ABC):
     @abstractmethod
     def get_default_model(self) -> str:
         pass
+
+    def get_capability_snapshot(self, model: str | None = None) -> ProviderCapabilitySnapshot:
+        del model
+        return ProviderCapabilitySnapshot(
+            provider_name=self.__class__.__name__,
+        )

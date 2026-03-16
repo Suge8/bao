@@ -7,6 +7,7 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
+from bao.agent.tool_approval import evaluate_tool_approval
 from bao.agent.tool_result import ToolExecutionOutput, ToolExecutionResult
 from bao.agent.tools.base import Tool
 
@@ -22,6 +23,9 @@ class ToolMetadata:
     keyword_aliases: tuple[str, ...] = ()
     auto_callable: bool = True
     summary: str = ""
+    approval_scope: str = ""
+    risk_level: str = "low"
+    side_effects: tuple[str, ...] = ()
 
 
 class ToolRegistry:
@@ -54,6 +58,9 @@ class ToolRegistry:
             keyword_aliases=(),
             auto_callable=True,
             summary=summary,
+            approval_scope="",
+            risk_level="low",
+            side_effects=(),
         )
 
     @classmethod
@@ -67,6 +74,7 @@ class ToolRegistry:
         summary = metadata.summary.strip() or short_hint or base.summary
         aliases = cls._normalize_terms(*metadata.aliases)
         keyword_aliases = cls._normalize_terms(*metadata.keyword_aliases)
+        side_effects = cls._normalize_terms(*metadata.side_effects)
         return ToolMetadata(
             bundle=bundle,
             short_hint=short_hint,
@@ -74,6 +82,9 @@ class ToolRegistry:
             keyword_aliases=keyword_aliases,
             auto_callable=bool(metadata.auto_callable),
             summary=summary,
+            approval_scope=metadata.approval_scope.strip().lower(),
+            risk_level=(metadata.risk_level or "low").strip().lower() or "low",
+            side_effects=side_effects,
         )
 
     def register(self, tool: Tool, *, metadata: ToolMetadata | None = None) -> None:
@@ -146,6 +157,10 @@ class ToolRegistry:
             "\n\n[Analyze the error above and try a different approach.]"
         )
 
+    @staticmethod
+    def _format_approval_required(name: str, detail: str) -> str:
+        return f"{detail}\n\n[Do not retry {name} until the user explicitly approves it.]"
+
     def _schema_for_tool(self, tool: Tool, *, slim: bool) -> dict[str, Any]:
         cache_key = (tool.name, slim)
         cached = self._schema_cache.get(cache_key)
@@ -209,6 +224,7 @@ class ToolRegistry:
         *,
         raw_arguments: str | None = None,
         argument_parse_error: str | None = None,
+        approval_context: dict[str, Any] | None = None,
     ) -> ToolExecutionOutput:
         """Execute a tool by name, returning result or error string."""
         tool = self._tools.get(name)
@@ -240,6 +256,21 @@ class ToolRegistry:
                     message="Invalid tool parameters",
                     value=f"Error: Invalid parameters for tool '{name}': {'; '.join(errors)}\n\n[Analyze the error above and try a different approach.]",
                 )
+            if approval_context is not None:
+                metadata = self._metadata.get(name)
+                decision = evaluate_tool_approval(
+                    tool_name=name,
+                    user_text=approval_context.get("user_text", ""),
+                    approval_scope=metadata.approval_scope if metadata else "",
+                    risk_level=metadata.risk_level if metadata else "low",
+                    side_effects=metadata.side_effects if metadata else (),
+                )
+                if not decision.allowed:
+                    return self._error_result(
+                        code="approval_required",
+                        message="Tool requires explicit user approval",
+                        value=self._format_approval_required(name, decision.reason),
+                    )
             return await tool.execute(**params)
         except asyncio.CancelledError:
             raise

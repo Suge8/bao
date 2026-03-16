@@ -76,15 +76,6 @@ def parse_subagent_result_payload(raw_event: Any) -> SubagentResultEvent | None:
         result=result if isinstance(result, str) else "",
     )
 
-
-def parse_subagent_result_event(metadata: dict[str, Any] | None) -> SubagentResultEvent | None:
-    if not isinstance(metadata, dict):
-        return None
-    return parse_subagent_result_payload(
-        metadata.get("control_event", metadata.get("system_event"))
-    )
-
-
 # ---------------------------------------------------------------------------
 # 1. parse_llm_json — pure function, no deps
 # ---------------------------------------------------------------------------
@@ -274,6 +265,13 @@ def parse_tool_error(
                     retryable=False,
                     message=result.message or "Tool not found",
                 )
+            if result.code == "approval_required":
+                return _info(
+                    category=ToolErrorCategory.APPROVAL_REQUIRED,
+                    code=result.code,
+                    retryable=False,
+                    message=result.message or "Tool requires explicit user approval",
+                )
             if result.code == "timeout":
                 return _info(
                     category=ToolErrorCategory.TIMEOUT,
@@ -459,7 +457,8 @@ def build_tool_execute_kwargs(
     *,
     raw_arguments: str | None,
     argument_parse_error: str | None,
-) -> dict[str, str]:
+    approval_context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Only pass structured tool-call kwargs when the executor supports them."""
     try:
         parameters = inspect.signature(execute_fn).parameters.values()
@@ -468,13 +467,15 @@ def build_tool_execute_kwargs(
     accepts_var_kwargs = any(param.kind is inspect.Parameter.VAR_KEYWORD for param in parameters)
     param_names = {param.name for param in parameters}
 
-    kwargs: dict[str, str] = {}
+    kwargs: dict[str, Any] = {}
     if raw_arguments is not None and (accepts_var_kwargs or "raw_arguments" in param_names):
         kwargs["raw_arguments"] = raw_arguments
     if argument_parse_error is not None and (
         accepts_var_kwargs or "argument_parse_error" in param_names
     ):
         kwargs["argument_parse_error"] = argument_parse_error
+    if approval_context is not None and (accepts_var_kwargs or "approval_context" in param_names):
+        kwargs["approval_context"] = approval_context
     return kwargs
 
 
