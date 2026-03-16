@@ -4,7 +4,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.." || exit 1
 
-PYTHONPATH=. uv run pytest -m smoke \
+PYTHONPATH=. uv run python -m pytest -m smoke \
     tests/test_asyncio_runner.py \
     tests/test_jsonc_patch.py \
     tests/test_chat_model.py \

@@ -136,6 +136,7 @@ markers = [
     "unit: fast deterministic tests for local iteration",
     "integration: cross-module and boundary tests",
     "smoke: critical-path regression checks",
+    "desktop_ui_smoke: desktop UI smoke and screenshot contract checks",
     "gui: desktop and QML tests that need PySide6 or UI harnesses",
     "slow: expensive tests that are not part of the default fast path",
 ]

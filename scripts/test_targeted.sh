@@ -11,4 +11,4 @@ if [ "$#" -eq 0 ]; then
     exit 1
 fi
 
-PYTHONPATH=. uv run pytest "$@"
+PYTHONPATH=. uv run python -m pytest "$@"
