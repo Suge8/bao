@@ -22,6 +22,16 @@ def test_desktop_release_workflow_supports_rebuilding_existing_tag() -> None:
     assert "Validate desktop packaging guard rails" in text
 
 
+def test_desktop_release_workflow_uses_split_desktop_build_script_suites() -> None:
+    text = _read(".github/workflows/desktop-release.yml")
+
+    assert "tests/test_desktop_build_scripts_docs.py" in text
+    assert "tests/test_desktop_build_scripts_packaging.py" in text
+    assert "tests/test_desktop_build_scripts_release.py" in text
+    assert "tests/test_desktop_build_scripts_resources.py" in text
+    assert "tests/test_desktop_build_scripts.py" not in text
+
+
 def test_desktop_release_workflow_uses_pyinstaller_as_primary_packager() -> None:
     text = _read(".github/workflows/desktop-release.yml")
 

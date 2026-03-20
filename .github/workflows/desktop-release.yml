@@ -87,7 +87,13 @@ jobs:
         run: uv run python app/scripts/validate_release_version.py --github-ref "${{ needs.resolve-release.outputs.release_ref }}"
 
       - name: Validate desktop packaging guard rails
-        run: PYTHONPATH=. uv run pytest tests/test_desktop_build_scripts.py -q
+        run: >-
+          PYTHONPATH=. uv run pytest
+          tests/test_desktop_build_scripts_docs.py
+          tests/test_desktop_build_scripts_packaging.py
+          tests/test_desktop_build_scripts_release.py
+          tests/test_desktop_build_scripts_resources.py
+          -q
 
   build-mac:
     needs: [resolve-release, validate-version, preflight-windows-installer]
