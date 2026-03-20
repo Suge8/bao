@@ -97,6 +97,12 @@ Bao Desktop 支持这些基础命令：
 
 ---
 
+## 资源事实源
+
+- Windows 安装器与应用图标统一使用 `app/resources/logo.ico`
+
+---
+
 ## 一句话
 
 **下载即用，打开即聊。**
