@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from app.scripts.build_qml_rcc import _qt_tool_path, build_qrc_text
+from app.scripts.build_qml_rcc import QrcBuildOptions, _qt_tool_path, build_qrc_text
 
 
 def test_build_qrc_text_excludes_output_rcc_from_resources(tmp_path: Path) -> None:
@@ -24,9 +24,11 @@ def test_build_qrc_text_excludes_output_rcc_from_resources(tmp_path: Path) -> No
     qrc_text = build_qrc_text(
         qml_root,
         resources_root,
-        cache_root=cache_root,
-        with_qml_cache=False,
-        skip_resource_paths={output_rcc},
+        QrcBuildOptions(
+            cache_root=cache_root,
+            with_qml_cache=False,
+            skip_resource_paths={output_rcc},
+        ),
     )
 
     assert "logo.svg" in qrc_text

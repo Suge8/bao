@@ -9,6 +9,12 @@ Item {
     property var sessionService: null
     property var configService: null
     readonly property bool hasSessionService: sessionService !== null
+    readonly property bool compactLayout: width <= 440
+    readonly property int workspaceMargin: compactLayout ? 12 : 16
+    readonly property int workspaceSpacing: compactLayout ? 12 : 16
+    readonly property int railPreferredWidth: compactLayout ? 188 : 272
+    readonly property int railMinimumWidth: compactLayout ? 176 : 256
+    readonly property int railMaximumWidth: compactLayout ? 208 : 288
     property real railOpacity: 1.0
     property real railShift: 0.0
     property real railScale: 1.0
@@ -64,14 +70,14 @@ Item {
 
     RowLayout {
         anchors.fill: parent
-        anchors.margins: 16
-        spacing: 16
+        anchors.margins: root.workspaceMargin
+        spacing: root.workspaceSpacing
 
         Item {
             objectName: "sessionRailStage"
-            Layout.preferredWidth: 272
-            Layout.minimumWidth: 256
-            Layout.maximumWidth: 288
+            Layout.preferredWidth: root.railPreferredWidth
+            Layout.minimumWidth: root.railMinimumWidth
+            Layout.maximumWidth: root.railMaximumWidth
             Layout.fillHeight: true
             opacity: root.railOpacity
             scale: root.railScale

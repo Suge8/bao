@@ -2,16 +2,24 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
-from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Callable, ClassVar
 
 from PySide6.QtCore import Property, QObject, Signal, Slot
 
 from app.backend.asyncio_runner import AsyncioRunner
+from app.backend.profile_state import (
+    RefreshResultPayload,
+    active_profile_row,
+    project_profiles,
+    registry_snapshot,
+)
 from bao.profile import (
+    CreateProfileOptions,
     ProfileContext,
     ProfileRegistry,
+    ProfileUpdateOptions,
+    RenameProfileOptions,
     create_profile,
     delete_profile,
     load_active_profile_snapshot,
@@ -26,13 +34,9 @@ class ProfileService(QObject):
     profilesChanged: ClassVar[Signal] = Signal()
     activeProfileChanged: ClassVar[Signal] = Signal()
     errorChanged: ClassVar[Signal] = Signal()
-    _refreshResult: ClassVar[Signal] = Signal(int, bool, str, object)
+    _refreshResult: ClassVar[Signal] = Signal(object)
 
-    def __init__(
-        self,
-        runner: AsyncioRunner | None = None,
-        parent: QObject | None = None,
-    ) -> None:
+    def __init__(self, runner: AsyncioRunner | None = None, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._runner = runner
         self._shared_workspace_path = ""
@@ -41,6 +45,7 @@ class ProfileService(QObject):
         self._profile_rows: list[dict[str, Any]] = []
         self._last_error = ""
         self._refresh_generation = 0
+        self._refresh_inflight_paths: set[str] = set()
         self._refreshResult.connect(self._handle_refresh_result)
 
     @Property(list, notify=profilesChanged)
@@ -49,7 +54,7 @@ class ProfileService(QObject):
 
     @Property(dict, notify=activeProfileChanged)
     def activeProfile(self) -> dict[str, Any]:
-        return self._active_profile_row()
+        return active_profile_row(self._profile_rows, self._active_context)
 
     @Property(dict, notify=activeProfileChanged)
     def activeProfileContext(self) -> dict[str, Any]:
@@ -70,32 +75,17 @@ class ProfileService(QObject):
 
     @Property(dict, notify=profilesChanged)
     def registrySnapshot(self) -> dict[str, Any]:
-        registry = self._registry
-        if registry is None:
-            return {}
-        return {
-            "version": registry.version,
-            "defaultProfileId": registry.default_profile_id,
-            "activeProfileId": registry.active_profile_id,
-            "profiles": [asdict(spec) for spec in registry.profiles],
-        }
+        return registry_snapshot(self._registry)
 
     def _shared_workspace(self) -> Path:
         return Path(self._shared_workspace_path).expanduser()
 
-    def _run_workspace_action(
-        self,
-        action: Callable[[Path], tuple[ProfileRegistry, ProfileContext]],
-    ) -> None:
+    def _run_workspace_action(self, action: Callable[[Path], tuple[ProfileRegistry, ProfileContext]]) -> None:
         if not self._shared_workspace_path:
             return
         self._run_action(self._shared_workspace(), action)
 
-    def _run_profile_action(
-        self,
-        profile_id: str,
-        action: Callable[[Path, str], tuple[ProfileRegistry, ProfileContext]],
-    ) -> None:
+    def _run_profile_action(self, profile_id: str, action: Callable[[Path, str], tuple[ProfileRegistry, ProfileContext]]) -> None:
         normalized_id = profile_id.strip()
         if not normalized_id:
             return
@@ -109,13 +99,16 @@ class ProfileService(QObject):
         if not raw:
             return
         shared_workspace = Path(raw).expanduser()
+        workspace_key = str(shared_workspace)
         if self._runner is None:
             self._run_action(
                 shared_workspace,
                 lambda workspace: load_active_profile_snapshot(shared_workspace=workspace),
             )
             return
-        self._shared_workspace_path = str(shared_workspace)
+        self._shared_workspace_path = workspace_key
+        if workspace_key in self._refresh_inflight_paths:
+            return
         self._submit_refresh(self._next_refresh_generation(), shared_workspace)
 
     @Slot(str)
@@ -133,8 +126,10 @@ class ProfileService(QObject):
         self._run_workspace_action(
             lambda shared_workspace: create_profile(
                 display_name,
-                shared_workspace=shared_workspace,
-                activate=True,
+                CreateProfileOptions(
+                    shared_workspace=shared_workspace,
+                    activate=True,
+                ),
             ),
         )
 
@@ -155,7 +150,7 @@ class ProfileService(QObject):
             lambda shared_workspace, normalized_id: rename_profile(
                 normalized_id,
                 display_name,
-                shared_workspace=shared_workspace,
+                RenameProfileOptions(shared_workspace=shared_workspace),
             ),
         )
 
@@ -165,44 +160,13 @@ class ProfileService(QObject):
             profile_id,
             lambda shared_workspace, normalized_id: update_profile(
                 normalized_id,
-                display_name=display_name,
-                storage_key=storage_key,
-                shared_workspace=shared_workspace,
+                ProfileUpdateOptions(
+                    shared_workspace=shared_workspace,
+                    display_name=display_name,
+                    storage_key=storage_key,
+                ),
             ),
         )
-
-    def _project_profiles(
-        self,
-        registry: ProfileRegistry,
-        context: ProfileContext,
-    ) -> list[dict[str, Any]]:
-        active_id = context.profile_id
-        return [
-            {
-                "id": spec.id,
-                "displayName": spec.display_name,
-                "storageKey": spec.storage_key,
-                "avatarKey": spec.avatar_key,
-                "canDelete": spec.id != registry.default_profile_id,
-                "enabled": bool(spec.enabled),
-                "createdAt": spec.created_at,
-                "isActive": spec.id == active_id,
-            }
-            for spec in registry.profiles
-        ]
-
-    def _active_profile_row(
-        self,
-        *,
-        rows: list[dict[str, Any]] | None = None,
-        context: ProfileContext | None = None,
-    ) -> dict[str, Any]:
-        active_context = self._active_context if context is None else context
-        active_id = active_context.profile_id if active_context is not None else ""
-        for item in self._profile_rows if rows is None else rows:
-            if str(item.get("id", "")) == active_id:
-                return dict(item)
-        return {}
 
     def _run_action(
         self,
@@ -229,21 +193,25 @@ class ProfileService(QObject):
         runner = self._runner
         if runner is None:
             return
+        workspace_key = str(shared_workspace)
+        if workspace_key in self._refresh_inflight_paths:
+            return
+        self._refresh_inflight_paths.add(workspace_key)
         coro = self._load_snapshot(shared_workspace)
         try:
             future = runner.submit(coro)
         except RuntimeError:
             coro.close()
+            self._refresh_inflight_paths.discard(workspace_key)
             self._set_error("Asyncio runner is not available.")
             return
         future.add_done_callback(
-            lambda future, seq=request_seq: self._emit_refresh_result(seq, future)
+            lambda future, seq=request_seq, path=workspace_key: self._emit_refresh_result(
+                seq, path, future
+            )
         )
 
-    async def _load_snapshot(
-        self,
-        shared_workspace: Path,
-    ) -> tuple[str, ProfileRegistry, ProfileContext]:
+    async def _load_snapshot(self, shared_workspace: Path) -> tuple[str, ProfileRegistry, ProfileContext]:
         runner = self._runner
         if runner is None:
             raise RuntimeError("Asyncio runner is not available.")
@@ -253,32 +221,54 @@ class ProfileService(QObject):
         )
         return str(shared_workspace), registry, context
 
-    def _emit_refresh_result(self, request_seq: int, future: Any) -> None:
+    def _emit_refresh_result(self, request_seq: int, workspace_key: str, future: Any) -> None:
         try:
             payload = future.result()
-            self._refreshResult.emit(request_seq, True, "", payload)
+            self._refreshResult.emit(
+                RefreshResultPayload(
+                    request_seq=request_seq,
+                    workspace_key=workspace_key,
+                    ok=True,
+                    message="",
+                    payload=payload,
+                )
+            )
         except (asyncio.CancelledError, concurrent.futures.CancelledError):
-            self._refreshResult.emit(request_seq, False, "cancelled", None)
+            self._refreshResult.emit(
+                RefreshResultPayload(
+                    request_seq=request_seq,
+                    workspace_key=workspace_key,
+                    ok=False,
+                    message="cancelled",
+                    payload=None,
+                )
+            )
         except Exception as exc:
-            self._refreshResult.emit(request_seq, False, str(exc), None)
+            self._refreshResult.emit(
+                RefreshResultPayload(
+                    request_seq=request_seq,
+                    workspace_key=workspace_key,
+                    ok=False,
+                    message=str(exc),
+                    payload=None,
+                )
+            )
 
-    @Slot(int, bool, str, object)
-    def _handle_refresh_result(
-        self,
-        request_seq: int,
-        ok: bool,
-        message: str,
-        payload: object,
-    ) -> None:
-        if request_seq != self._refresh_generation:
-            return
-        if not ok:
-            self._set_error(message)
-            return
-        if not isinstance(payload, tuple) or len(payload) != 3:
+    @Slot(object)
+    def _handle_refresh_result(self, result: object) -> None:
+        if not isinstance(result, RefreshResultPayload):
             self._set_error("Profile refresh returned invalid payload.")
             return
-        workspace_raw, registry, context = payload
+        self._refresh_inflight_paths.discard(result.workspace_key)
+        if result.request_seq != self._refresh_generation:
+            return
+        if not result.ok:
+            self._set_error(result.message)
+            return
+        if not isinstance(result.payload, tuple) or len(result.payload) != 3:
+            self._set_error("Profile refresh returned invalid payload.")
+            return
+        workspace_raw, registry, context = result.payload
         if not isinstance(registry, ProfileRegistry) or not isinstance(context, ProfileContext):
             self._set_error("Profile refresh returned invalid payload.")
             return
@@ -289,19 +279,13 @@ class ProfileService(QObject):
             shared_workspace=Path(str(workspace_raw)).expanduser(),
         )
 
-    def _apply_state(
-        self,
-        registry: ProfileRegistry,
-        context: ProfileContext,
-        *,
-        shared_workspace: Path,
-    ) -> None:
+    def _apply_state(self, registry: ProfileRegistry, context: ProfileContext, *, shared_workspace: Path) -> None:
         previous_rows = self._profile_rows
         previous_context = self._active_context
-        previous_active_profile = self._active_profile_row(rows=previous_rows, context=previous_context)
+        previous_active_profile = active_profile_row(previous_rows, previous_context)
         workspace_changed = self._shared_workspace_path != str(shared_workspace)
-        profile_rows = self._project_profiles(registry, context)
-        active_profile = self._active_profile_row(rows=profile_rows, context=context)
+        profile_rows = project_profiles(registry, context)
+        active_profile = active_profile_row(profile_rows, context)
         profiles_changed = workspace_changed or registry != self._registry or profile_rows != previous_rows
         active_changed = context != previous_context or active_profile != previous_active_profile
         self._shared_workspace_path = str(shared_workspace)

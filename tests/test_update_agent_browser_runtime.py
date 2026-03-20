@@ -90,10 +90,12 @@ def test_update_runtime_manifest_records_agent_browser_home(tmp_path: Path, monk
     agent_browser_home.mkdir(parents=True, exist_ok=True)
 
     runtime_script.update_runtime_manifest(
-        version="0.19.0",
-        platform_key="darwin-arm64",
-        browser_dir=browser_dir,
-        agent_browser_home=agent_browser_home,
+        runtime_script.RuntimeManifestUpdate(
+            version="0.19.0",
+            platform_key="darwin-arm64",
+            browser_dir=browser_dir,
+            agent_browser_home=agent_browser_home,
+        )
     )
 
     manifest = json.loads((runtime_root / "runtime.json").read_text(encoding="utf-8"))

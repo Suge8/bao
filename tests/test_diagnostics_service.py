@@ -4,6 +4,7 @@ import importlib
 from typing import Any, cast
 
 from bao.runtime_diagnostics import get_runtime_diagnostics_store
+from bao.runtime_diagnostics_models import RuntimeEventRequest
 
 pytest = importlib.import_module("pytest")
 QtGui = pytest.importorskip("PySide6.QtGui")
@@ -24,11 +25,13 @@ def test_diagnostics_service_projects_store_snapshot(qt_app) -> None:
     store.set_log_file_path("/tmp/bao-desktop.log")
     store.append_log_line("2026-03-07 10:00:00 | INFO | boot")
     store.record_event(
-        source="provider",
-        stage="chat",
-        message="model timeout",
-        code="provider_error",
-        retryable=True,
+        RuntimeEventRequest(
+            source="provider",
+            stage="chat",
+            message="model timeout",
+            code="provider_error",
+            retryable=True,
+        )
     )
     store.set_tool_observability({"tool_calls_total": 5, "tool_calls_error": 2})
 
@@ -57,11 +60,16 @@ def test_diagnostics_service_builds_assistant_prompt(qt_app) -> None:
     store.set_log_file_path("/tmp/bao-desktop.log")
     store.append_log_line("2026-03-07 10:00:00 | ERROR | timeout")
     store.record_event(
-        source="subagent",
-        stage="failed",
-        message="Error: provider timeout",
-        code="provider_error",
-        retryable=False,
+        RuntimeEventRequest(
+            source="subagent",
+            stage="failed",
+            message="Error: provider timeout",
+            code="provider_error",
+            retryable=False,
+        )
+    )
+    store.set_tool_observability(
+        {"tool_calls_total": 5, "tool_calls_error": 2, "retry_rate_proxy": 0.25}
     )
 
     service = DiagnosticsService()
@@ -70,6 +78,10 @@ def test_diagnostics_service_builds_assistant_prompt(qt_app) -> None:
     assert "provider timeout" in prompt
     assert "Recent structured diagnostics" in prompt
     assert "Recent log tail" not in prompt
+    assert "Tool observability:" in prompt
+    assert "- Tool calls: 5" in prompt
+    assert "- Retry rate: 0.25" in prompt
+    assert "{'tool_calls_total': 5" not in prompt
 
 
 def test_diagnostics_service_omits_empty_assistant_prompt(qt_app) -> None:
@@ -83,6 +95,23 @@ def test_diagnostics_service_omits_empty_assistant_prompt(qt_app) -> None:
     service = DiagnosticsService()
 
     assert service.buildAssistantPrompt() == ""
+
+
+def test_diagnostics_service_formats_observability_items_consistently(qt_app) -> None:
+    from app.backend.diagnostics import DiagnosticsService
+
+    items = DiagnosticsService._build_observability_items(
+        {"tool_calls_total": 5, "retry_rate_proxy": 0.5, "ignored": "x"}
+    )
+    prompt_lines = DiagnosticsService._build_observability_prompt_lines(
+        {"tool_calls_total": 5, "retry_rate_proxy": 0.5, "ignored": "x"}
+    )
+
+    assert items == [
+        {"label": "Tool calls", "value": "5"},
+        {"label": "Retry rate", "value": "0.50"},
+    ]
+    assert prompt_lines == ["- Tool calls: 5", "- Retry rate: 0.50"]
 
 
 def test_diagnostics_service_coalesces_burst_store_updates(qt_app) -> None:
@@ -104,11 +133,13 @@ def test_diagnostics_service_coalesces_burst_store_updates(qt_app) -> None:
 
     store.append_log_line("2026-03-07 10:00:00 | INFO | boot")
     store.record_event(
-        source="provider",
-        stage="chat",
-        message="model timeout",
-        code="provider_error",
-        retryable=True,
+        RuntimeEventRequest(
+            source="provider",
+            stage="chat",
+            message="model timeout",
+            code="provider_error",
+            retryable=True,
+        )
     )
     store.set_tool_observability({"tool_calls_total": 5, "tool_calls_error": 2})
 

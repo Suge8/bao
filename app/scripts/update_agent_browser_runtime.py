@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -33,6 +34,14 @@ _CURRENT_PLATFORM_BROWSER_GLOBS = {
     "linux-x64": ("**/chrome-linux/chrome",),
     "win32-x64": ("**/chrome-win64/chrome.exe", "**/chrome-win/chrome.exe"),
 }
+
+
+@dataclass(frozen=True)
+class RuntimeManifestUpdate:
+    version: str
+    platform_key: str
+    browser_dir: Path
+    agent_browser_home: Path
 
 
 def parse_args() -> argparse.Namespace:
@@ -69,10 +78,12 @@ def main() -> int:
             browser_dir=browser_dir,
         )
         update_runtime_manifest(
-            version=version,
-            platform_key=platform_key,
-            browser_dir=browser_dir,
-            agent_browser_home=agent_browser_home,
+            RuntimeManifestUpdate(
+                version=version,
+                platform_key=platform_key,
+                browser_dir=browser_dir,
+                agent_browser_home=agent_browser_home,
+            )
         )
 
     print(f"[ok] Vendored agent-browser {version} for {platform_key} into {RUNTIME_ROOT}")
@@ -164,13 +175,7 @@ def vendor_browser_bundle(*, install_dir: Path, browser_dir: Path) -> None:
     )
 
 
-def update_runtime_manifest(
-    *,
-    version: str,
-    platform_key: str,
-    browser_dir: Path,
-    agent_browser_home: Path,
-) -> None:
+def update_runtime_manifest(update: RuntimeManifestUpdate) -> None:
     manifest_path = RUNTIME_ROOT / "runtime.json"
     manifest = {}
     if manifest_path.is_file():
@@ -178,20 +183,23 @@ def update_runtime_manifest(
         if not isinstance(manifest, dict):
             manifest = {}
 
-    browser_executable = detect_browser_executable(browser_dir=browser_dir, platform_key=platform_key)
+    browser_executable = detect_browser_executable(
+        browser_dir=update.browser_dir,
+        platform_key=update.platform_key,
+    )
     platforms = manifest.get("platforms")
     if not isinstance(platforms, dict):
         platforms = {}
 
-    agent_browser_rel = _PACKAGE_BINARY_MAP[platform_key][1]
-    platforms[platform_key] = {
-        "agentBrowserHomePath": str(agent_browser_home.relative_to(RUNTIME_ROOT)),
+    agent_browser_rel = _PACKAGE_BINARY_MAP[update.platform_key][1]
+    platforms[update.platform_key] = {
+        "agentBrowserHomePath": str(update.agent_browser_home.relative_to(RUNTIME_ROOT)),
         "agentBrowserPath": agent_browser_rel,
         "browserExecutablePath": str(browser_executable.relative_to(RUNTIME_ROOT)),
     }
 
     manifest["source"] = "agent-browser"
-    manifest["version"] = version
+    manifest["version"] = update.version
     manifest["platforms"] = dict(sorted(platforms.items()))
     manifest.pop("agentBrowserPath", None)
     manifest.pop("browserExecutablePath", None)

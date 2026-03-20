@@ -7,6 +7,7 @@ import subprocess
 import sys
 import sysconfig
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 
 import PySide6
@@ -14,6 +15,13 @@ import PySide6
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_QML_ROOT = PROJECT_ROOT / "app" / "qml"
 DEFAULT_RESOURCES_ROOT = PROJECT_ROOT / "app" / "resources"
+
+
+@dataclass(frozen=True)
+class QrcBuildOptions:
+    cache_root: Path
+    with_qml_cache: bool
+    skip_resource_paths: set[Path] | None = None
 
 
 def parse_args() -> argparse.Namespace:
@@ -140,20 +148,17 @@ def _generate_qml_cache_entries(qml_root: Path, cache_root: Path) -> list[str]:
 def build_qrc_text(
     qml_root: Path,
     resources_root: Path,
-    *,
-    cache_root: Path,
-    with_qml_cache: bool,
-    skip_resource_paths: set[Path] | None = None,
+    options: QrcBuildOptions,
 ) -> str:
     qml_entries = _qrc_entries(qml_root, prefix="/app/qml")
-    if qml_entries and with_qml_cache:
-        compiled_entries = _generate_qml_cache_entries(qml_root, cache_root)
+    if qml_entries and options.with_qml_cache:
+        compiled_entries = _generate_qml_cache_entries(qml_root, options.cache_root)
         if compiled_entries:
             qml_entries = qml_entries[:-1] + compiled_entries + [qml_entries[-1]]
     resource_entries = _qrc_entries(
         resources_root,
         prefix="/app/resources",
-        skip_paths=skip_resource_paths,
+        skip_paths=options.skip_resource_paths,
     )
     lines = ["<RCC>"]
     lines.extend(qml_entries)
@@ -175,9 +180,11 @@ def main() -> int:
         qrc_text = build_qrc_text(
             qml_root,
             resources_root,
-            cache_root=cache_root,
-            with_qml_cache=bool(args.with_qml_cache),
-            skip_resource_paths={output_rcc},
+            QrcBuildOptions(
+                cache_root=cache_root,
+                with_qml_cache=bool(args.with_qml_cache),
+                skip_resource_paths={output_rcc},
+            ),
         )
         if args.output_qrc:
             output_qrc = Path(args.output_qrc).expanduser().resolve(strict=False)

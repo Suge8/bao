@@ -50,8 +50,8 @@ Rectangle {
             id: iconGlyph
             visible: root.iconSource !== ""
             source: root.iconSource
-            width: root.iconSize
-            height: root.iconSize
+            Layout.preferredWidth: root.iconSize
+            Layout.preferredHeight: root.iconSize
             sourceSize: Qt.size(root.iconSize, root.iconSize)
             opacity: root.buttonEnabled ? 1.0 : 0.6
             layer.enabled: visible

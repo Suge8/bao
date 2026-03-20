@@ -1,21 +1,17 @@
 from __future__ import annotations
 
-import hashlib
-import os
 import platform
-import shlex
-import subprocess
 import sys
 import tempfile
 from collections.abc import Coroutine
 from pathlib import Path
 from typing import Any, Callable, ClassVar, Protocol, TypeVar, cast
-from urllib.parse import urlparse
 
 import httpx
 from PySide6.QtCore import Property, QObject, QUrl, Signal, Slot
 from PySide6.QtGui import QDesktopServices
 
+from app.backend._update_installers import UpdateInstallersMixin
 from app.backend.update_core import ReleaseInfo, detect_platform_key, resolve_available_release
 from bao import __version__
 
@@ -38,7 +34,7 @@ def _typed_slot(
     return cast(Callable[[_F], _F], slot_decorator)
 
 
-class UpdateService(QObject):
+class UpdateService(UpdateInstallersMixin, QObject):
     stateChanged: ClassVar[Signal] = Signal(str)
     metadataChanged: ClassVar[Signal] = Signal()
     quitRequested: ClassVar[Signal] = Signal()
@@ -208,105 +204,6 @@ class UpdateService(QObject):
         except Exception as exc:
             self._installFinished.emit(False, str(exc))
 
-    async def _download_release(self, release: ReleaseInfo, workdir: Path) -> Path:
-        parsed = urlparse(release.asset.url)
-        file_name = Path(parsed.path).name or "bao-update.bin"
-        package_path = workdir / file_name
-        digest = hashlib.sha256()
-        async with httpx.AsyncClient(follow_redirects=True, timeout=None) as client:
-            async with client.stream("GET", release.asset.url) as response:
-                _ = response.raise_for_status()
-                with package_path.open("wb") as fh:
-                    async for chunk in response.aiter_bytes():
-                        if not chunk:
-                            continue
-                        fh.write(chunk)
-                        digest.update(chunk)
-        actual_hash = digest.hexdigest()
-        if actual_hash.lower() != release.asset.sha256.lower():
-            raise ValueError("Downloaded update failed SHA-256 verification.")
-        return package_path
-
-    def _launch_windows_installer(self, package_path: Path, release: ReleaseInfo) -> None:
-        if not getattr(sys, "frozen", False):
-            self._open_release_url(release)
-            return
-        args = [str(package_path)]
-        args.extend(
-            release.asset.silent_args or ("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-")
-        )
-        _ = subprocess.Popen(args, close_fds=True)
-
-    def _launch_macos_installer(self, package_path: Path, workdir: Path) -> None:
-        target_app = self._current_app_bundle()
-        if target_app is None or package_path.suffix.lower() != ".zip":
-            self._open_release_url(self._release)
-            return
-        staged_root = workdir / "staged"
-        staged_root.mkdir(parents=True, exist_ok=True)
-        _ = subprocess.run(
-            ["/usr/bin/ditto", "-x", "-k", str(package_path), str(staged_root)], check=True
-        )
-        staged_app = next((path for path in staged_root.iterdir() if path.suffix == ".app"), None)
-        if staged_app is None:
-            raise ValueError("Update archive does not contain an app bundle.")
-        script_path = workdir / "apply_update.sh"
-        script_text = self._build_macos_apply_script(
-            pid=os.getpid(),
-            target_app=target_app,
-            staged_app=staged_app,
-            workdir=workdir,
-        )
-        script_path.write_text(script_text, encoding="utf-8")
-        _ = script_path.chmod(0o755)
-        _ = subprocess.Popen(
-            ["/bin/bash", str(script_path)], close_fds=True, start_new_session=True
-        )
-
-    def _build_macos_apply_script(
-        self,
-        *,
-        pid: int,
-        target_app: Path,
-        staged_app: Path,
-        workdir: Path,
-    ) -> str:
-        q = shlex.quote
-        return f"""#!/usr/bin/env bash
-set -euo pipefail
-PID={pid}
-TARGET_APP={q(str(target_app))}
-STAGED_APP={q(str(staged_app))}
-WORKDIR={q(str(workdir))}
-
-while kill -0 \"$PID\" 2>/dev/null; do
-  sleep 0.3
-done
-
-TMP_APP=\"${{TARGET_APP}}.new\"
-BAK_APP=\"${{TARGET_APP}}.bak\"
-rm -rf \"$TMP_APP\" \"$BAK_APP\"
-/usr/bin/ditto \"$STAGED_APP\" \"$TMP_APP\"
-if [[ -d \"$TARGET_APP\" ]]; then
-  mv \"$TARGET_APP\" \"$BAK_APP\"
-fi
-mv \"$TMP_APP\" \"$TARGET_APP\"
-open \"$TARGET_APP\"
-( sleep 5; rm -rf \"$WORKDIR\" ) >/dev/null 2>&1 &
-"""
-
-    def _current_app_bundle(self) -> Path | None:
-        if not getattr(sys, "frozen", False):
-            return None
-        exe_path = Path(sys.executable).resolve()
-        if exe_path.suffix == ".app":
-            return exe_path
-        parents = list(exe_path.parents)
-        for parent in parents:
-            if parent.suffix == ".app":
-                return parent
-        return None
-
     def _handle_check_finished(self, ok: bool, error: str, release: object) -> None:
         self._active_check_future = None
         if not ok:
@@ -365,6 +262,18 @@ open \"$TARGET_APP\"
         url = release.release_url or release.asset.url
         if url:
             _ = QDesktopServices.openUrl(QUrl(url))
+
+    def _current_app_bundle(self) -> Path | None:
+        if not getattr(sys, "frozen", False):
+            return None
+        exe_path = Path(sys.executable).resolve()
+        if exe_path.suffix == ".app":
+            return exe_path
+        app_parent = next((parent for parent in exe_path.parents if parent.suffix == ".app"), None)
+        if app_parent is not None or platform.system() != "Darwin":
+            return app_parent
+        app_path = Path(sys.argv[0]).resolve()
+        return next((parent for parent in app_path.parents if parent.suffix == ".app"), None)
 
     def _replace_cancel_handle(self, attr_name: str, handle: object) -> None:
         self._clear_cancel_handle(attr_name)

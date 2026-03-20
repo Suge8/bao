@@ -66,6 +66,7 @@ def test_heartbeat_bridge_reads_current_profile_file_when_live_is_stale(tmp_path
     _ = qt_app
     from app.backend.asyncio_runner import AsyncioRunner
     from app.backend.heartbeat import HeartbeatBridgeService
+    from bao.heartbeat._service_models import HeartbeatServiceOptions
     from bao.heartbeat.service import HeartbeatService
 
     runner = AsyncioRunner()
@@ -84,7 +85,13 @@ def test_heartbeat_bridge_reads_current_profile_file_when_live_is_stale(tmp_path
         )
 
         service = HeartbeatBridgeService(runner)
-        stale_live = HeartbeatService(stale_prompt, _FakeProvider(), "test")
+        stale_live = HeartbeatService(
+            HeartbeatServiceOptions(
+                workspace=stale_prompt,
+                provider=_FakeProvider(),
+                model="test",
+            )
+        )
         service.setLiveHeartbeatService(stale_live)
         service.setLocalHeartbeatFilePath(str(current_file))
 
@@ -98,10 +105,35 @@ def test_heartbeat_bridge_reads_current_profile_file_when_live_is_stale(tmp_path
         runner.shutdown(grace_s=1.0)
 
 
+def test_heartbeat_bridge_bootstraps_local_file_from_active_profile(
+    monkeypatch, tmp_path: Path, qt_app
+) -> None:
+    _ = qt_app
+    from app.backend.asyncio_runner import AsyncioRunner
+    from app.backend.heartbeat import HeartbeatBridgeService
+    from bao.profile import CreateProfileOptions, create_profile
+
+    monkeypatch.setattr("bao.config.paths.get_data_dir", lambda: tmp_path)
+    shared_workspace = tmp_path / "workspace"
+    _registry, work_context = create_profile(
+        "Work",
+        CreateProfileOptions(shared_workspace=shared_workspace, data_dir=tmp_path),
+    )
+
+    runner = AsyncioRunner()
+    runner.start()
+    try:
+        service = HeartbeatBridgeService(runner)
+        assert Path(service.heartbeatFilePath) == work_context.heartbeat_file
+    finally:
+        runner.shutdown(grace_s=1.0)
+
+
 def test_heartbeat_bridge_runs_current_profile_live_service(tmp_path: Path, qt_app) -> None:
     _ = qt_app
     from app.backend.asyncio_runner import AsyncioRunner
     from app.backend.heartbeat import HeartbeatBridgeService
+    from bao.heartbeat._service_models import HeartbeatServiceOptions
     from bao.heartbeat.service import HeartbeatService
 
     runner = AsyncioRunner()
@@ -114,11 +146,17 @@ def test_heartbeat_bridge_runs_current_profile_live_service(tmp_path: Path, qt_a
 
         service = HeartbeatBridgeService(runner)
         session_service = _FakeSessionService()
-        live = HeartbeatService(prompt_root, _FakeProvider(), "test")
+        live = HeartbeatService(
+            HeartbeatServiceOptions(
+                workspace=prompt_root,
+                provider=_FakeProvider(),
+                model="test",
+            )
+        )
         service.setSessionService(session_service)
         service.setLocalHeartbeatFilePath(str(heartbeat_file))
         service.setLiveHeartbeatService(live)
-        service.setGatewayRunning(True)
+        service.setHubRunning(True)
         _wait_until(lambda: service.canRunNow is True)
 
         service.runNow()
@@ -137,6 +175,7 @@ def test_heartbeat_bridge_blocks_run_without_heartbeat_file(tmp_path: Path, qt_a
     _ = qt_app
     from app.backend.asyncio_runner import AsyncioRunner
     from app.backend.heartbeat import HeartbeatBridgeService
+    from bao.heartbeat._service_models import HeartbeatServiceOptions
     from bao.heartbeat.service import HeartbeatService
 
     runner = AsyncioRunner()
@@ -147,10 +186,16 @@ def test_heartbeat_bridge_blocks_run_without_heartbeat_file(tmp_path: Path, qt_a
         heartbeat_file = prompt_root / "HEARTBEAT.md"
 
         service = HeartbeatBridgeService(runner)
-        live = HeartbeatService(prompt_root, _FakeProvider(), "test")
+        live = HeartbeatService(
+            HeartbeatServiceOptions(
+                workspace=prompt_root,
+                provider=_FakeProvider(),
+                model="test",
+            )
+        )
         service.setLocalHeartbeatFilePath(str(heartbeat_file))
         service.setLiveHeartbeatService(live)
-        service.setGatewayRunning(True)
+        service.setHubRunning(True)
         _wait_until(lambda: service.heartbeatFileExists is False)
 
         assert service.canRunNow is False

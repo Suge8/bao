@@ -31,19 +31,30 @@ def runner() -> Iterator[AsyncioRunner]:
         current.shutdown()
 
 
+def _skills_options(tmp_path: Path, runner: AsyncioRunner):
+    from app.backend.skills import SkillsServiceOptions
+
+    return SkillsServiceOptions(
+        runner=runner,
+        workspace_path=str(tmp_path),
+        user_skills_dir=str(tmp_path / "user-skills"),
+    )
+
+
 def test_skills_service_create_save_delete_and_filter(
     tmp_path: Path, runner: AsyncioRunner
 ) -> None:
     from app.backend.skills import SkillsService
 
-    service = SkillsService(runner, str(tmp_path))
+    user_skills_dir = tmp_path / "user-skills"
+    service = SkillsService(_skills_options(tmp_path, runner))
 
     created_events: list[tuple[str, bool]] = []
     _ = service.operationFinished.connect(lambda message, ok: created_events.append((message, ok)))
 
     assert service.createSkill("my-ui-skill", "Use for premium UI polish.") is True
-    assert cast(str, cast(object, service.selectedSkillId)) == "workspace:my-ui-skill"
-    assert cast(int, cast(object, service.workspaceCount)) >= 1
+    assert cast(str, cast(object, service.selectedSkillId)) == "user:my-ui-skill"
+    assert cast(int, cast(object, service.userCount)) >= 1
     assert created_events[-1] == ("created", True)
 
     assert (
@@ -56,9 +67,9 @@ def test_skills_service_create_save_delete_and_filter(
     assert selected_skill["description"] == "Updated UI workflow"
     assert created_events[-1] == ("saved", True)
 
-    service.setSourceFilter("workspace")
-    workspace_items = cast(list[dict[str, object]], cast(object, service.skills))
-    assert all(item["source"] == "workspace" for item in workspace_items)
+    service.setSourceFilter("user")
+    user_items = cast(list[dict[str, object]], cast(object, service.skills))
+    assert all(item["source"] == "user" for item in user_items)
 
     service.setQuery("updated ui")
     filtered_items = cast(list[dict[str, object]], cast(object, service.skills))
@@ -69,7 +80,7 @@ def test_skills_service_create_save_delete_and_filter(
     service.setSourceFilter("all")
     assert service.deleteSelectedSkill() is True
     assert created_events[-1] == ("deleted", True)
-    assert not (tmp_path / "skills" / "my-ui-skill").exists()
+    assert not (user_skills_dir / "my-ui-skill").exists()
 
 def test_parse_search_output_extracts_skill_refs() -> None:
     from app.backend.skills import SkillsService
@@ -95,9 +106,9 @@ Install with npx skills add acme/skills@docs-pro
 def test_skills_service_tracks_discovery_task_and_marks_installed(
     tmp_path: Path, runner: AsyncioRunner
 ) -> None:
-    from app.backend.skills import SkillsService
+    from app.backend.skills import DiscoverTaskUpdate, SkillsService
 
-    service = SkillsService(runner, str(tmp_path))
+    service = SkillsService(_skills_options(tmp_path, runner))
     service._set_discover_results(  # type: ignore[attr-defined]
         [
             {
@@ -118,10 +129,12 @@ def test_skills_service_tracks_discovery_task_and_marks_installed(
     )
 
     service._set_discover_task(  # type: ignore[attr-defined]
-        state="working",
-        kind="install",
-        message="Importing vercel-labs/agent-skills@frontend-design",
-        reference="vercel-labs/agent-skills@frontend-design",
+        DiscoverTaskUpdate(
+            state="working",
+            kind="install",
+            message="Importing vercel-labs/agent-skills@frontend-design",
+            reference="vercel-labs/agent-skills@frontend-design",
+        )
     )
     task_snapshot = cast(dict[str, str], cast(object, service.discoverTask))
     assert task_snapshot["state"] == "working"
@@ -129,17 +142,18 @@ def test_skills_service_tracks_discovery_task_and_marks_installed(
     assert cast(str, cast(object, service.discoverTaskState)) == "working"
     assert cast(str, cast(object, service.discoverTaskKind)) == "install"
 
-    service._mark_discover_installed(["workspace:frontend-design"])  # type: ignore[attr-defined]
+    service._mark_discover_installed(["user:frontend-design"])  # type: ignore[attr-defined]
     selected = cast(dict[str, object], cast(object, service.selectedDiscoverItem))
     assert selected["installState"] == "installed"
 
 
-def test_import_installed_skills_copies_into_workspace(
+def test_import_installed_skills_copies_into_user_skills(
     tmp_path: Path, runner: AsyncioRunner
 ) -> None:
     from app.backend.skills import SkillsService
 
-    service = SkillsService(runner, str(tmp_path))
+    user_skills_dir = tmp_path / "user-skills"
+    service = SkillsService(_skills_options(tmp_path, runner))
     source_root = tmp_path / "temp" / ".agents" / "skills" / "design-ops"
     source_root.mkdir(parents=True)
     (source_root / "SKILL.md").write_text(
@@ -149,8 +163,8 @@ def test_import_installed_skills_copies_into_workspace(
 
     imported_ids = service._import_installed_skills(tmp_path / "temp" / ".agents" / "skills")
 
-    assert imported_ids == ["workspace:design-ops"]
-    assert (tmp_path / "skills" / "design-ops" / "SKILL.md").exists()
+    assert imported_ids == ["user:design-ops"]
+    assert (user_skills_dir / "design-ops" / "SKILL.md").exists()
 
 
 def test_import_installed_skills_can_filter_target_names(
@@ -158,7 +172,8 @@ def test_import_installed_skills_can_filter_target_names(
 ) -> None:
     from app.backend.skills import SkillsService
 
-    service = SkillsService(runner, str(tmp_path))
+    user_skills_dir = tmp_path / "user-skills"
+    service = SkillsService(_skills_options(tmp_path, runner))
     for skill_name in ("design-ops", "frontend-design"):
         source_dir = tmp_path / ".agents" / "skills" / skill_name
         source_dir.mkdir(parents=True)
@@ -171,9 +186,24 @@ def test_import_installed_skills_can_filter_target_names(
         tmp_path / ".agents" / "skills", target_names=["frontend-design"]
     )
 
-    assert imported_ids == ["workspace:frontend-design"]
-    assert not (tmp_path / "skills" / "design-ops").exists()
-    assert (tmp_path / "skills" / "frontend-design" / "SKILL.md").exists()
+    assert imported_ids == ["user:frontend-design"]
+    assert not (user_skills_dir / "design-ops").exists()
+    assert (user_skills_dir / "frontend-design" / "SKILL.md").exists()
+
+
+def test_set_workspace_path_keeps_user_skill_root(
+    tmp_path: Path, runner: AsyncioRunner
+) -> None:
+    from app.backend.skills import SkillsService
+
+    user_skills_dir = tmp_path / "user-skills"
+    service = SkillsService(_skills_options(tmp_path, runner))
+
+    service.setWorkspacePath(str(tmp_path / "other-workspace"))
+    assert service.createSkill("profile-audit", "Use for profile audit tasks.") is True
+
+    assert (user_skills_dir / "profile-audit" / "SKILL.md").exists()
+    assert not (tmp_path / "other-workspace" / "profile-audit" / "SKILL.md").exists()
 
 
 def test_extract_reference_name_returns_skill_suffix() -> None:

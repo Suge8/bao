@@ -3,21 +3,23 @@ from __future__ import annotations
 import importlib
 from pathlib import Path
 
-from tests.desktop_ui_testkit import (
-    DESKTOP_SMOKE_SCREENSHOT_SCENARIOS,
-    assert_png_matches_baseline,
-    desktop_ui_smoke_output_dir,
-    qapp,  # noqa: F401
-    resolve_ignore_regions,
-    wait_for_scene_contract,
-)
-from tests.test_chat_view_integration import (
+from tests._chat_view_integration_testkit import (
     DummyChatService,
     DummyConfigService,
     EmptyMessagesModel,
     SessionsModel,
     _load_light_main_window,
     _process,
+)
+from tests.desktop_ui_testkit import (
+    DESKTOP_SMOKE_SCREENSHOT_SCENARIOS,
+    assert_item_within_window,
+    assert_png_matches_baseline,
+    desktop_ui_smoke_output_dir,
+    find_object,
+    qapp,  # noqa: F401
+    resolve_ignore_regions,
+    wait_for_scene_contract,
 )
 
 pytest = importlib.import_module("pytest")
@@ -134,3 +136,42 @@ def test_desktop_smoke_screenshot_scenarios_render_expected_dimensions(scenario)
         max_changed_pixels=scenario.max_changed_pixels,
         ignore_regions=ignore_regions,
     )
+
+
+def test_chat_min_idle_state_content_stays_inside_window() -> None:
+    config_service = _build_smoke_config_service()
+    chat_service = DummyChatService(
+        EmptyMessagesModel(),
+        state="idle",
+        active_session_ready=False,
+        active_session_has_messages=False,
+    )
+    session_model = SessionsModel([])
+    engine, root = _load_light_main_window(
+        config_service=config_service,
+        session_model=session_model,
+        chat_service=chat_service,
+    )
+
+    try:
+        _ = root.setProperty("width", 640)
+        _ = root.setProperty("height", 600)
+        _ = root.setProperty("startView", "chat")
+        wait_for_scene_contract(root, DESKTOP_SMOKE_SCREENSHOT_SCENARIOS[2].scene_contract)
+
+        for object_name in (
+            "chatDetailStage",
+            "chatEmptyIdleState",
+            "chatEmptyIdleTitle",
+            "chatEmptyIdleHint",
+            "sidebarEmptyState",
+            "sidebarEmptyTitle",
+            "sidebarEmptyHint",
+            "sidebarEmptyCta",
+        ):
+            obj = find_object(root, object_name)
+            assert_item_within_window(root, obj, inset=8.0)
+    finally:
+        root.deleteLater()
+        engine.deleteLater()
+        _process(0)

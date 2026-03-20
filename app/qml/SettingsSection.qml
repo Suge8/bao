@@ -14,6 +14,18 @@ Rectangle {
     property bool spotlight: false
     default property alias content: contentArea.data
 
+    function invokeHelpHandler() {
+        var handler = root.helpHandler
+        if (typeof handler === "function")
+            handler()
+    }
+
+    function invokeActionHandler() {
+        var handler = root.actionHandler
+        if (typeof handler === "function")
+            handler()
+    }
+
     Layout.fillWidth: true
     implicitHeight: headerRow.implicitHeight + contentArea.implicitHeight + 68
     radius: radiusLg
@@ -71,7 +83,7 @@ Rectangle {
                     hoverFillColor: root.helpEmphasis ? accentHover : bgCardHover
                     outlineColor: root.helpEmphasis ? accent : borderSubtle
                     glyphColor: root.helpEmphasis ? "#FFFFFFFF" : textSecondary
-                    onClicked: if (root.helpHandler) root.helpHandler()
+                    onClicked: root.invokeHelpHandler()
                 }
 
                 PillActionButton {
@@ -80,7 +92,7 @@ Rectangle {
                     buttonEnabled: root.actionEnabled
                     minHeight: 30
                     horizontalPadding: 20
-                    onClicked: if (root.actionHandler) root.actionHandler()
+                    onClicked: root.invokeActionHandler()
                 }
             }
         }

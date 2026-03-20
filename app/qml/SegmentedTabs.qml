@@ -33,8 +33,9 @@ Item {
             if (String((items[index] || {}).value || "") === currentValue)
                 return index
         }
-        return 0
+        return -1
     }
+    readonly property bool hasSelection: root.selectedIndex >= 0
 
     implicitWidth: preferredTrackWidth > 0 ? preferredTrackWidth : tabRow.implicitWidth + trackPadding * 2
     implicitHeight: tabHeight
@@ -60,11 +61,11 @@ Item {
             height: parent.height - root.trackPadding * 2
             radius: height / 2
             color: root.accentColor
-            visible: root.tabCount > 0
+            visible: root.tabCount > 0 && root.hasSelection
             x: root.trackPadding + (tabTrack.selectedTabItem ? tabTrack.selectedTabItem.x : 0)
             width: tabTrack.selectedTabItem
                 ? tabTrack.selectedTabItem.width
-                : root.segmentWidth
+                : 0
 
             Behavior on x { NumberAnimation { duration: 220; easing.type: root.emphasisEasing } }
             Behavior on width { NumberAnimation { duration: 220; easing.type: root.standardEasing } }

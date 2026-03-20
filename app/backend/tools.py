@@ -1,36 +1,21 @@
 from __future__ import annotations
 
-import asyncio
-from collections.abc import Coroutine
-from pathlib import Path
-from typing import Any, ClassVar
+from typing import ClassVar
 
 from PySide6.QtCore import Property, QObject, Signal, Slot
 
+from app.backend._tools_common import _as_dict
+from app.backend._tools_probe import ToolsServiceProbeMixin
+from app.backend._tools_projection import ToolsServiceProjectionMixin
 from app.backend.asyncio_runner import AsyncioRunner
 from app.backend.config import ConfigService
-from app.backend.list_model import KeyValueListModel, build_selection_projection
-from bao.agent.capability_registry import build_capability_registry_snapshot
+from app.backend.list_model import KeyValueListModel
 from bao.agent.tool_catalog import ToolCatalog
-from bao.agent.tool_probe_cache import delete_probe_result, load_probe_results, save_probe_result
-from bao.agent.tools.mcp import probe_mcp_server
-from bao.config.schema import MCPServerConfig
+from bao.agent.tool_probe_cache import load_probe_results
 from bao.runtime_diagnostics import get_runtime_diagnostics_store
 
 
-def _as_dict(value: object) -> dict[str, object] | None:
-    if isinstance(value, dict):
-        return value
-    return None
-
-
-def _as_str(value: object, default: str = "") -> str:
-    if isinstance(value, str):
-        return value
-    return default
-
-
-class ToolsService(QObject):
+class ToolsService(ToolsServiceProbeMixin, ToolsServiceProjectionMixin, QObject):
     changed: ClassVar[Signal] = Signal()
     busyChanged: ClassVar[Signal] = Signal()
     errorChanged: ClassVar[Signal] = Signal(str)
@@ -184,7 +169,7 @@ class ToolsService(QObject):
         ):
             return False
         if previous_name and previous_name != next_name:
-            delete_probe_result(self._probe_cache_dir, previous_name)
+            self._delete_probe_result(previous_name)
         self._schedule_probe(next_name, server_value)
         return True
 
@@ -197,8 +182,7 @@ class ToolsService(QObject):
         if target not in current_servers:
             return False
         current_servers.pop(target, None)
-        self._probe_results.pop(target, None)
-        delete_probe_result(self._probe_cache_dir, target)
+        self._delete_probe_result(target)
         return self._save_patch(
             {"tools.mcpServers": current_servers},
             success_code="deleted",
@@ -235,207 +219,3 @@ class ToolsService(QObject):
 
     def _current_mcp_servers(self) -> dict[str, object]:
         return dict(_as_dict(self._config_service.get("tools.mcpServers", {})) or {})
-
-    def _refresh(self) -> None:
-        snapshot = build_capability_registry_snapshot(
-            catalog=self._catalog,
-            config_data=self._config_data,
-            probe_results=self._probe_results,
-            query=self._query.lower(),
-            source_filter=self._source_filter,
-            selected_id=self._selected_id,
-            diagnostics_snapshot=self._runtime_diagnostics.snapshot(max_events=0, max_log_lines=0),
-        )
-        next_overview = dict(snapshot.overview)
-        selection = build_selection_projection(
-            [dict(item) for item in snapshot.items],
-            preferred_id=snapshot.selected_id or self._selected_id,
-        )
-        next_items = selection.items
-        if (
-            next_overview == self._overview
-            and next_items == self._items
-            and selection.selected_id == self._selected_id
-        ):
-            return
-        self._overview = next_overview
-        self._items = next_items
-        self._catalog_model.sync_items(self._items_for_kind("builtin"))
-        self._server_model.sync_items(self._items_for_kind("mcp_server"))
-        self._selected_id = selection.selected_id
-        self.changed.emit()
-
-    def _selected_item(self) -> dict[str, object]:
-        if not self._selected_id:
-            return {}
-        return next(
-            (dict(item) for item in self._items if str(item.get("id", "")) == self._selected_id),
-            {},
-        )
-
-    def _items_for_kind(self, kind: str) -> list[dict[str, object]]:
-        return [dict(item) for item in self._items if str(item.get("kind", "")) == kind]
-
-    def _submit_task(self, kind: str, coro: Coroutine[Any, Any, Any]) -> None:
-        try:
-            future = self._runner.submit(coro)
-        except RuntimeError:
-            coro.close()
-            self._set_error("Asyncio runner is not available.")
-            return
-        self._set_busy(True)
-        future.add_done_callback(lambda f, task_kind=kind: self._emit_runner_result(task_kind, f))
-
-    def _save_patch(
-        self, patch: dict[str, object], *, success_code: str, failure_code: str
-    ) -> bool:
-        ok = self._config_service.save(patch)
-        if not ok:
-            self.operationFinished.emit(failure_code, False)
-            return False
-        self.setConfigData(self._config_service.exportData())
-        self.operationFinished.emit(success_code, True)
-        return True
-
-    def _reject(self, message: str) -> None:
-        self._set_error(message)
-        self.operationFinished.emit(message, False)
-
-    def _emit_runner_result(self, kind: str, future: Any) -> None:
-        try:
-            payload = future.result()
-            self._runnerResult.emit(kind, True, "", payload)
-        except asyncio.CancelledError:
-            self._runnerResult.emit(kind, False, "cancelled", None)
-        except Exception as exc:
-            self._runnerResult.emit(kind, False, str(exc), None)
-
-    @Slot(str, bool, str, object)
-    def _handle_runner_result(self, kind: str, ok: bool, message: str, payload: object) -> None:
-        self._set_busy(False)
-        if kind != "probe_server":
-            return
-        if not ok:
-            self._set_error(message)
-            self.operationFinished.emit(message, False)
-            return
-        result = _as_dict(payload) or {}
-        name = _as_str(result.get("serverName", ""))
-        if name:
-            self._probe_results[name] = dict(
-                save_probe_result(self._probe_cache_dir, name, dict(result))
-            )
-        self._refresh()
-        self.operationFinished.emit(
-            "probe_ok"
-            if bool(result.get("canConnect"))
-            else _as_str(result.get("error", "probe_failed")),
-            bool(result.get("canConnect")),
-        )
-
-    async def _probe_server(self, name: str, config_value: dict[str, object]) -> dict[str, object]:
-        cfg = MCPServerConfig.model_validate(config_value)
-        return await probe_mcp_server(name, cfg)
-
-    def _schedule_probe(self, name: str, config_value: dict[str, object]) -> None:
-        self._submit_task("probe_server", self._probe_server(name, config_value))
-
-    def _normalize_server_payload(
-        self, payload: dict[str, object]
-    ) -> tuple[str, str, dict[str, object]]:
-        previous_name = _as_str(payload.get("previousName", "")).strip()
-        next_name = _as_str(payload.get("name", "")).strip()
-        if not next_name:
-            raise ValueError("Server name is required.")
-
-        transport = _as_str(payload.get("transport", "stdio"), "stdio").strip().lower()
-        if transport not in {"stdio", "http"}:
-            transport = "stdio"
-
-        command = _as_str(payload.get("command", "")).strip()
-        url = _as_str(payload.get("url", "")).strip()
-        if transport == "stdio" and not command:
-            raise ValueError("Command is required for stdio MCP servers.")
-        if transport == "http" and not url:
-            raise ValueError("URL is required for HTTP MCP servers.")
-
-        server_value: dict[str, object] = {
-            "command": command if transport == "stdio" else "",
-            "args": self._parse_multiline_list(_as_str(payload.get("argsText", ""))),
-            "env": self._parse_key_values(_as_str(payload.get("envText", "")), separators=("=",)),
-            "url": url if transport == "http" else "",
-            "headers": self._parse_key_values(
-                _as_str(payload.get("headersText", "")), separators=(":", "=")
-            ),
-            "toolTimeoutSeconds": max(1, self._coerce_int(payload.get("toolTimeoutSeconds"), 30)),
-            "maxTools": self._normalize_optional_int(payload.get("maxTools")),
-            "slimSchema": payload.get("slimSchema")
-            if isinstance(payload.get("slimSchema"), bool)
-            else None,
-        }
-        return previous_name, next_name, server_value
-
-    @staticmethod
-    def _parse_multiline_list(value: str) -> list[str]:
-        return [line.strip() for line in value.splitlines() if line.strip()]
-
-    @staticmethod
-    def _parse_key_values(value: str, *, separators: tuple[str, ...]) -> dict[str, str]:
-        result: dict[str, str] = {}
-        for raw_line in value.splitlines():
-            line = raw_line.strip()
-            if not line:
-                continue
-            pair: tuple[str, str] | None = None
-            for separator in separators:
-                if separator in line:
-                    left, right = line.split(separator, 1)
-                    pair = (left.strip(), right.strip())
-                    break
-            if pair is None or not pair[0]:
-                raise ValueError(f"Invalid key/value line: {raw_line}")
-            result[pair[0]] = pair[1]
-        return result
-
-    @staticmethod
-    def _coerce_int(value: object, default: int) -> int:
-        if isinstance(value, int) and not isinstance(value, bool):
-            return value
-        if isinstance(value, str):
-            stripped = value.strip()
-            if stripped:
-                try:
-                    return int(stripped)
-                except ValueError:
-                    return default
-        return default
-
-    def _normalize_optional_int(self, value: object) -> int | None:
-        coerced = self._coerce_int(value, 0)
-        return coerced if coerced > 0 else None
-
-    def _resolve_probe_cache_dir(self) -> Path:
-        config_path = self._config_service.getConfigFilePath()
-        return Path(config_path).expanduser().resolve().parent if config_path else Path.home() / ".bao"
-
-    def _reload_probe_cache(self) -> None:
-        self._probe_cache_dir = self._resolve_probe_cache_dir()
-        cached = load_probe_results(self._probe_cache_dir)
-        current_servers = set(self._current_mcp_servers())
-        self._probe_results = {
-            name: dict(result) for name, result in cached.items() if not current_servers or name in current_servers
-        }
-
-    def _set_busy(self, active: bool) -> None:
-        self._busy_count = max(0, self._busy_count + (1 if active else -1))
-        next_busy = self._busy_count > 0
-        if next_busy == self._busy:
-            return
-        self._busy = next_busy
-        self.busyChanged.emit()
-
-    def _set_error(self, message: str) -> None:
-        if message == self._error:
-            return
-        self._error = message
-        self.errorChanged.emit(message)

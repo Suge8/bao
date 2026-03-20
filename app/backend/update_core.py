@@ -27,6 +27,13 @@ class ReleaseInfo:
     asset: ReleaseAsset
 
 
+@dataclass(frozen=True)
+class ReleaseLookupRequest:
+    channel: str
+    current_version: str
+    platform_key: str
+
+
 def detect_platform_key(sys_platform: str, machine: str) -> str | None:
     machine_key = machine.strip().lower().replace("amd64", "x86_64")
     if sys_platform == "darwin":
@@ -48,42 +55,45 @@ def version_is_newer(candidate: str, current: str) -> bool:
 
 def resolve_available_release(
     feed: dict[str, Any],
-    *,
-    channel: str,
-    current_version: str,
-    platform_key: str,
+    request: ReleaseLookupRequest | None = None,
+    **legacy: Any,
 ) -> ReleaseInfo | None:
+    lookup = request or ReleaseLookupRequest(
+        channel=str(legacy.pop("channel")),
+        current_version=str(legacy.pop("current_version")),
+        platform_key=str(legacy.pop("platform_key")),
+    )
     channels = feed.get("channels")
     if not isinstance(channels, dict):
         raise ValueError("Feed is missing channels object")
-    release = channels.get(channel)
+    release = channels.get(lookup.channel)
     if not isinstance(release, dict):
-        raise ValueError(f"Feed is missing channel: {channel}")
+        raise ValueError(f"Feed is missing channel: {lookup.channel}")
 
     version = _read_str(release, "version")
     if not version:
-        raise ValueError(f"Feed channel {channel} is missing version")
-    if not version_is_newer(version, current_version):
+        raise ValueError(f"Feed channel {lookup.channel} is missing version")
+    if not version_is_newer(version, lookup.current_version):
         return None
 
     platforms = release.get("platforms")
     if not isinstance(platforms, dict):
-        raise ValueError(f"Feed channel {channel} is missing platforms object")
-    raw_asset = platforms.get(platform_key)
+        raise ValueError(f"Feed channel {lookup.channel} is missing platforms object")
+    raw_asset = platforms.get(lookup.platform_key)
     if not isinstance(raw_asset, dict):
         return None
 
     asset = ReleaseAsset(
-        platform=platform_key,
-        url=_required_str(raw_asset, "url", f"platform {platform_key} url"),
-        kind=_required_str(raw_asset, "kind", f"platform {platform_key} kind"),
-        sha256=_required_str(raw_asset, "sha256", f"platform {platform_key} sha256"),
-        size=_required_int(raw_asset, "size", f"platform {platform_key} size"),
+        platform=lookup.platform_key,
+        url=_required_str(raw_asset, "url", f"platform {lookup.platform_key} url"),
+        kind=_required_str(raw_asset, "kind", f"platform {lookup.platform_key} kind"),
+        sha256=_required_str(raw_asset, "sha256", f"platform {lookup.platform_key} sha256"),
+        size=_required_int(raw_asset, "size", f"platform {lookup.platform_key} size"),
         silent_args=_read_str_tuple(raw_asset.get("silentArgs")),
     )
     return ReleaseInfo(
         version=version,
-        channel=channel,
+        channel=lookup.channel,
         release_url=_read_str(release, "releaseUrl"),
         notes_url=_read_str(release, "notesUrl"),
         notes_markdown=_read_str(release, "notesMarkdown"),

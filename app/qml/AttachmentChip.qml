@@ -12,6 +12,12 @@ Item {
     property bool openOnClick: false
     property var removeAction: null
 
+    function invokeRemoveAction() {
+        var action = root.removeAction
+        if (typeof action === "function")
+            action()
+    }
+
     width: isImage ? 72 : 164
     height: 56
 
@@ -182,7 +188,7 @@ Item {
                 anchors.fill: parent
                 hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor
-                onClicked: if (root.removeAction) root.removeAction()
+                onClicked: root.invokeRemoveAction()
             }
         }
 

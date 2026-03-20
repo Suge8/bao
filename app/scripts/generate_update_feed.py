@@ -4,50 +4,57 @@ import argparse
 import hashlib
 import json
 import re
+from dataclasses import dataclass
 from pathlib import Path
 
 MAC_PATTERN = re.compile(r"^Bao-(?P<version>[^/]+)-macos-(?P<arch>arm64|x86_64)-update\.zip$")
 WIN_PATTERN = re.compile(r"^Bao-(?P<version>[^/]+)-windows-x64-setup\.exe$")
 
 
-def build_feed(
-    *, release_json: Path, assets_dir: Path, repo: str, channel: str
-) -> dict[str, object]:
-    release = json.loads(release_json.read_text(encoding="utf-8"))
+@dataclass(frozen=True)
+class FeedBuildRequest:
+    release_json: Path
+    assets_dir: Path
+    repo: str
+    channel: str
+
+
+def build_feed(request: FeedBuildRequest) -> dict[str, object]:
+    release = json.loads(request.release_json.read_text(encoding="utf-8"))
     tag = _read_str(release, "tagName") or _read_str(release, "tag_name")
     version = tag.removeprefix("v")
     if not tag or not version:
         raise ValueError("Release JSON is missing tagName")
 
     asset_map: dict[str, dict[str, object]] = {}
-    for file_path in sorted(assets_dir.iterdir()):
+    for file_path in sorted(request.assets_dir.iterdir()):
         if not file_path.is_file():
             continue
         mac_match = MAC_PATTERN.match(file_path.name)
         if mac_match:
             asset_map[f"macos-{mac_match.group('arch')}"] = _asset_payload(
                 file_path=file_path,
-                url=_download_url(repo, tag, file_path.name),
+                url=_download_url(request.repo, tag, file_path.name),
                 kind="app-zip",
             )
             continue
         if WIN_PATTERN.match(file_path.name):
             payload = _asset_payload(
                 file_path=file_path,
-                url=_download_url(repo, tag, file_path.name),
+                url=_download_url(request.repo, tag, file_path.name),
                 kind="installer-exe",
             )
             payload["silentArgs"] = ["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-"]
             asset_map["windows-x64"] = payload
 
     if not asset_map:
-        raise ValueError(f"No update assets found in {assets_dir}")
+        raise ValueError(f"No update assets found in {request.assets_dir}")
 
     return {
         "app": "bao-desktop",
         "generatedAt": _read_str(release, "publishedAt") or _read_str(release, "published_at"),
         "channels": {
-            channel: {
+            request.channel: {
                 "version": version,
                 "releaseUrl": _read_str(release, "url") or _read_str(release, "html_url"),
                 "notesUrl": _read_str(release, "url") or _read_str(release, "html_url"),
@@ -96,10 +103,12 @@ def main() -> int:
     args = parser.parse_args()
 
     feed = build_feed(
-        release_json=Path(args.release_json),
-        assets_dir=Path(args.assets_dir),
-        repo=args.repo,
-        channel=args.channel,
+        FeedBuildRequest(
+            release_json=Path(args.release_json),
+            assets_dir=Path(args.assets_dir),
+            repo=args.repo,
+            channel=args.channel,
+        )
     )
 
     output_path = Path(args.output)

@@ -1,4 +1,5 @@
 from app.backend.session_projection import (
+    SidebarProjectionRequest,
     build_sidebar_projection,
     normalize_session_items,
     project_session_item,
@@ -155,9 +156,11 @@ def test_sidebar_projection_keeps_parent_running_and_active_row_visible() -> Non
     )
 
     projection = build_sidebar_projection(
-        sessions,
-        active_key="desktop:local::main",
-        expanded_groups={"desktop": False},
+        SidebarProjectionRequest(
+            sessions=sessions,
+            active_key="desktop:local::main",
+            expanded_groups={"desktop": False},
+        )
     )
 
     assert projection.unread_count == 1

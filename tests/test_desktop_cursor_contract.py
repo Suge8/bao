@@ -90,10 +90,12 @@ def test_session_item_partitions_main_and_delete_click_areas() -> None:
 
 
 def test_message_bubble_uses_mouse_area_as_cursor_owner() -> None:
-    message_bubble = _read_qml("MessageBubble.qml")
-    assert "id: clickArea" in message_bubble
-    assert "id: systemClickArea" in message_bubble
-    assert message_bubble.count("cursorShape: Qt.PointingHandCursor") >= 2
+    standard_bubble = _read_qml("MessageBubbleStandardBubble.qml")
+    system_bubble = _read_qml("MessageBubbleSystemBubble.qml")
+    assert "id: clickArea" in standard_bubble
+    assert "id: systemClickArea" in system_bubble
+    assert standard_bubble.count("cursorShape: Qt.PointingHandCursor") >= 1
+    assert system_bubble.count("cursorShape: Qt.PointingHandCursor") >= 1
 
 
 def test_hover_handlers_do_not_own_cursor_feedback() -> None:
@@ -138,7 +140,7 @@ def test_sidebar_guards_injected_services_at_root() -> None:
     assert "readonly property bool hasChatService: chatService !== null" in text
     assert "readonly property bool hasSessionService: sessionService !== null" in text
     assert "readonly property bool hasDiagnosticsService: diagnosticsService !== null" in text
-    assert 'readonly property string currentState: resolvedGatewayState()' in text
+    assert 'readonly property string currentState: resolvedHubState()' in text
     assert 'readonly property bool isRunning: currentState === "running"' in text
     assert 'readonly property bool isStarting: currentState === "starting"' in text
     assert 'readonly property bool isError: currentState === "error"' in text

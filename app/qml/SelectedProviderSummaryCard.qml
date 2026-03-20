@@ -33,7 +33,7 @@ Rectangle {
 
     Rectangle {
         anchors.fill: parent
-        radius: parent.radius
+        radius: root.radius
         color: accent
         opacity: root.panelGlowOpacity
         visible: opacity > 0.001

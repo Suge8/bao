@@ -9,6 +9,13 @@ from PySide6.QtGui import QDesktopServices
 
 from bao.runtime_diagnostics import get_runtime_diagnostics_store
 
+_OBSERVABILITY_FIELDS: tuple[tuple[str, str], ...] = (
+    ("tool_calls_total", "Tool calls"),
+    ("tool_calls_error", "Tool errors"),
+    ("execution_errors", "Exec errors"),
+    ("retry_rate_proxy", "Retry rate"),
+)
+
 
 class DiagnosticsService(QObject):
     changed: ClassVar[Signal] = Signal()
@@ -113,14 +120,9 @@ class DiagnosticsService(QObject):
             lines.append(f"- [{code}] {message} ({source})")
 
         observability = snapshot.get("tool_observability", {})
-        if isinstance(observability, dict) and observability:
-            lines.extend(
-                [
-                    "",
-                    "Tool observability:",
-                    str(observability),
-                ]
-            )
+        observability_lines = self._build_observability_prompt_lines(observability)
+        if observability_lines:
+            lines.extend(["", "Tool observability:", *observability_lines])
 
         return "\n".join(lines)
 
@@ -128,20 +130,21 @@ class DiagnosticsService(QObject):
     def _build_observability_items(summary: dict[str, Any]) -> list[dict[str, str]]:
         if not isinstance(summary, dict) or not summary:
             return []
-        fields = (
-            ("tool_calls_total", "Tool calls"),
-            ("tool_calls_error", "Tool errors"),
-            ("execution_errors", "Exec errors"),
-            ("retry_rate_proxy", "Retry rate"),
-        )
         items: list[dict[str, str]] = []
-        for key, label in fields:
+        for key, label in _OBSERVABILITY_FIELDS:
             value = summary.get(key)
             if value is None:
                 continue
-            if isinstance(value, float):
-                text = f"{value:.2f}"
-            else:
-                text = str(value)
-            items.append({"label": label, "value": text})
+            items.append({"label": label, "value": DiagnosticsService._format_observability_value(value)})
         return items
+
+    @staticmethod
+    def _build_observability_prompt_lines(summary: object) -> list[str]:
+        items = DiagnosticsService._build_observability_items(summary if isinstance(summary, dict) else {})
+        return [f"- {item['label']}: {item['value']}" for item in items]
+
+    @staticmethod
+    def _format_observability_value(value: object) -> str:
+        if isinstance(value, float):
+            return f"{value:.2f}"
+        return str(value)

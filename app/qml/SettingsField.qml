@@ -18,6 +18,9 @@ Item {
     property int fieldFontPixelSize: typeButton
     property alias text: field.text
     readonly property alias inputItem: field
+    property string inputObjectName: ""
+    property var nextTabTarget: null
+    property var previousTabTarget: null
 
     property var currentValue: _loaded ? fieldValue() : undefined
     property bool _loaded: false
@@ -118,6 +121,7 @@ Item {
             TextField {
                 id: field
                 property bool baoClickAwayEditor: true
+                objectName: root.inputObjectName
                 anchors.fill: parent
                 hoverEnabled: true
                 leftPadding: sizeFieldPaddingX
@@ -133,6 +137,8 @@ Item {
                 selectedTextColor: textSelectionFg
                 echoMode: root.isSecret ? TextInput.Password : TextInput.Normal
                 verticalAlignment: TextInput.AlignVCenter
+                KeyNavigation.tab: root.nextTabTarget
+                KeyNavigation.backtab: root.previousTabTarget
                 onTextEdited: {
                     root._dirty = true
                     root.textEdited(text)

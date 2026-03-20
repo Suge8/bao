@@ -34,8 +34,8 @@
       "diag-section-events-light.svg",
       "diag-section-file-dark.svg",
       "diag-section-file-light.svg",
-      "diag-section-gateway-dark.svg",
-      "diag-section-gateway-light.svg",
+      "diag-section-hub-dark.svg",
+      "diag-section-hub-light.svg",
       "diag-section-logtail-dark.svg",
       "diag-section-logtail-light.svg",
       "halt.svg",
@@ -64,10 +64,10 @@
       "stop.svg"
     ],
     "illustrativeSpecial": [
-      "gateway-error.svg",
-      "gateway-idle.svg",
-      "gateway-running.svg",
-      "gateway-starting.svg",
+      "hub-error.svg",
+      "hub-idle.svg",
+      "hub-running.svg",
+      "hub-starting.svg",
       "ignite-dark.svg",
       "ignite-light.svg",
       "ignite.svg",
@@ -255,7 +255,7 @@
       "upstream": "database-settings.svg",
       "local": "iconoir/database-settings.svg",
       "usage": [
-        "gateway-section",
+        "hub-section",
         "system-data"
       ]
     },
@@ -264,7 +264,7 @@
       "upstream": "message-alert.svg",
       "local": "iconoir/message-alert.svg",
       "usage": [
-        "gateway-error",
+        "hub-error",
         "warnings"
       ]
     },
@@ -290,7 +290,7 @@
       "upstream": "play.svg",
       "local": "iconoir/play.svg",
       "usage": [
-        "gateway-idle",
+        "hub-idle",
         "start-action"
       ]
     },
@@ -299,7 +299,7 @@
       "upstream": "clock-rotate-right.svg",
       "local": "iconoir/clock-rotate-right.svg",
       "usage": [
-        "gateway-starting"
+        "hub-starting"
       ]
     },
     {
@@ -325,7 +325,7 @@
       "local": "lucide-lab/watch-loader.svg",
       "usage": [
         "loading",
-        "gateway-starting-alternate"
+        "hub-starting-alternate"
       ]
     },
     {
@@ -333,7 +333,7 @@
       "upstream": "pac-man.svg",
       "local": "lucide-lab/pac-man.svg",
       "usage": [
-        "gateway-running",
+        "hub-running",
         "playful-running-state"
       ]
     }

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Coroutine
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -75,3 +76,45 @@ def test_selected_memory_fact_read_model_tracks_selection_and_fallback() -> None
     )
     assert service.selectedMemoryFactKey == "fact-b"
     assert service.selectedMemoryFact["content"] == "Fact B"
+
+
+def test_set_storage_root_hint_defers_bootstrap_until_ensure_hydrated(monkeypatch) -> None:
+    service = MemoryService(_FakeRunner())
+    submitted: list[str] = []
+
+    def _submit_task(kind: str, coro: Coroutine[Any, Any, Any]) -> None:
+        submitted.append(kind)
+        coro.close()
+
+    monkeypatch.setattr(service, "_submit_task", _submit_task)
+
+    service.setStorageRootHint("/tmp/memory-root")
+
+    assert service.ready is False
+    assert service._desired_storage_root == "/tmp/memory-root"
+    assert submitted == []
+
+    service.ensureHydrated()
+
+    assert submitted == ["bootstrap"]
+
+
+def test_set_storage_root_hint_clears_stale_loaded_state() -> None:
+    service = MemoryService(_FakeRunner())
+    service._store = MagicMock()
+    service._storage_root = "/tmp/old-root"
+    service._ready = True
+    service._memory_categories = [{"category": "project", "facts": [{"key": "fact-a"}]}]
+    service._filtered_memory_categories = [{"category": "project"}]
+    service._experience_items = [{"key": "exp-a"}]
+    service._selected_memory_fact_key = "fact-a"
+    service._selected_experience_key = "exp-a"
+
+    service.setStorageRootHint("/tmp/new-root")
+
+    assert service._desired_storage_root == "/tmp/new-root"
+    assert service._store is None
+    assert service.ready is False
+    assert service.memoryCategoryCount == 0
+    assert service.experienceCount == 0
+    assert service.selectedMemoryFactKey == ""

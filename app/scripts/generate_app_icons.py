@@ -5,76 +5,123 @@ import importlib
 import shutil
 import subprocess
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 
 
-def _build_rounded_base(source: Path, size: int = 1024):
-    image_mod = importlib.import_module("PIL.Image")
-    image_chops_mod = importlib.import_module("PIL.ImageChops")
-    image_draw_mod = importlib.import_module("PIL.ImageDraw")
-    image_filter_mod = importlib.import_module("PIL.ImageFilter")
+@dataclass(frozen=True)
+class _IconModules:
+    image: object
+    chops: object
+    draw: object
+    filter: object
 
+
+@dataclass(frozen=True)
+class _IconFrame:
+    inner: int
+    radius: int
+    size: int
+
+
+def _load_pil_modules() -> _IconModules:
+    return _IconModules(
+        image=importlib.import_module("PIL.Image"),
+        chops=importlib.import_module("PIL.ImageChops"),
+        draw=importlib.import_module("PIL.ImageDraw"),
+        filter=importlib.import_module("PIL.ImageFilter"),
+    )
+
+
+def _crop_square_image(image_mod, source: Path):
     img = image_mod.open(source).convert("RGBA")
     side = min(img.width, img.height)
     left = (img.width - side) // 2
     top = (img.height - side) // 2
-    square = img.crop((left, top, left + side, top + side))
+    return img.crop((left, top, left + side, top + side))
 
-    canvas = image_mod.new("RGBA", (size, size), (0, 0, 0, 0))
-    inner = int(size * 0.88)
-    radius = int(inner * 0.24)
 
-    artwork = square.resize((inner, inner), image_mod.Resampling.LANCZOS)
-    mask = image_mod.new("L", (inner, inner), 0)
-    draw = image_draw_mod.Draw(mask)
-    draw.rounded_rectangle((0, 0, inner - 1, inner - 1), radius=radius, fill=255)
-
-    # Soft drop shadow for depth.
-    shadow = image_mod.new("RGBA", (inner, inner), (0, 0, 0, 0))
-    shadow_alpha = image_mod.new("L", (inner, inner), 0)
-    image_draw_mod.Draw(shadow_alpha).rounded_rectangle(
-        (0, 0, inner - 1, inner - 1), radius=radius, fill=170
+def _build_shadow(modules: _IconModules, frame: _IconFrame):
+    shadow = modules.image.new("RGBA", (frame.inner, frame.inner), (0, 0, 0, 0))
+    shadow_alpha = modules.image.new("L", (frame.inner, frame.inner), 0)
+    modules.draw.Draw(shadow_alpha).rounded_rectangle(
+        (0, 0, frame.inner - 1, frame.inner - 1),
+        radius=frame.radius,
+        fill=170,
     )
-    shadow_alpha = shadow_alpha.filter(image_filter_mod.GaussianBlur(max(2, size // 120)))
+    shadow_alpha = shadow_alpha.filter(modules.filter.GaussianBlur(max(2, frame.size // 120)))
     shadow.putalpha(shadow_alpha)
+    return shadow
 
-    layer = image_mod.new("RGBA", (inner, inner), (0, 0, 0, 0))
-    layer.paste(artwork, (0, 0), mask)
 
-    # Top gloss highlight.
-    highlight_alpha = image_mod.new("L", (inner, inner), 0)
-    hdraw = image_draw_mod.Draw(highlight_alpha)
-    top_stop = int(inner * 0.62)
+def _build_highlight(modules: _IconModules, frame: _IconFrame, mask):
+    highlight_alpha = modules.image.new("L", (frame.inner, frame.inner), 0)
+    hdraw = modules.draw.Draw(highlight_alpha)
+    top_stop = int(frame.inner * 0.62)
     for y in range(top_stop):
         t = y / max(1, top_stop - 1)
         alpha = int((1.0 - t) ** 1.6 * 105)
-        hdraw.line((0, y, inner, y), fill=alpha)
-    highlight_alpha = image_chops_mod.multiply(highlight_alpha, mask)
-    highlight = image_mod.new("RGBA", (inner, inner), (255, 255, 255, 0))
+        hdraw.line((0, y, frame.inner, y), fill=alpha)
+    highlight_alpha = modules.chops.multiply(highlight_alpha, mask)
+    highlight = modules.image.new("RGBA", (frame.inner, frame.inner), (255, 255, 255, 0))
     highlight.putalpha(highlight_alpha)
+    return highlight
 
-    # Bottom tonal shade.
-    shade_alpha = image_mod.new("L", (inner, inner), 0)
-    sdraw = image_draw_mod.Draw(shade_alpha)
-    start = int(inner * 0.58)
-    for y in range(start, inner):
-        t = (y - start) / max(1, inner - start - 1)
+
+def _build_shade(modules: _IconModules, frame: _IconFrame, mask):
+    shade_alpha = modules.image.new("L", (frame.inner, frame.inner), 0)
+    sdraw = modules.draw.Draw(shade_alpha)
+    start = int(frame.inner * 0.58)
+    for y in range(start, frame.inner):
+        t = (y - start) / max(1, frame.inner - start - 1)
         alpha = int((t**1.2) * 38)
-        sdraw.line((0, y, inner, y), fill=alpha)
-    shade_alpha = image_chops_mod.multiply(shade_alpha, mask)
-    shade = image_mod.new("RGBA", (inner, inner), (0, 0, 0, 0))
+        sdraw.line((0, y, frame.inner, y), fill=alpha)
+    shade_alpha = modules.chops.multiply(shade_alpha, mask)
+    shade = modules.image.new("RGBA", (frame.inner, frame.inner), (0, 0, 0, 0))
     shade.putalpha(shade_alpha)
+    return shade
 
-    # Subtle glossy stroke.
-    stroke = image_mod.new("RGBA", (inner, inner), (0, 0, 0, 0))
-    stroke_draw = image_draw_mod.Draw(stroke)
-    stroke_w = max(2, size // 256)
+
+def _build_stroke(modules: _IconModules, frame: _IconFrame):
+    stroke = modules.image.new("RGBA", (frame.inner, frame.inner), (0, 0, 0, 0))
+    stroke_draw = modules.draw.Draw(stroke)
+    stroke_w = max(2, frame.size // 256)
     stroke_draw.rounded_rectangle(
-        (stroke_w // 2, stroke_w // 2, inner - 1 - stroke_w // 2, inner - 1 - stroke_w // 2),
-        radius=max(1, radius - stroke_w // 2),
+        (
+            stroke_w // 2,
+            stroke_w // 2,
+            frame.inner - 1 - stroke_w // 2,
+            frame.inner - 1 - stroke_w // 2,
+        ),
+        radius=max(1, frame.radius - stroke_w // 2),
         outline=(255, 255, 255, 88),
         width=stroke_w,
     )
+    return stroke
+
+
+def _build_rounded_base(source: Path, size: int = 1024):
+    modules = _load_pil_modules()
+    square = _crop_square_image(modules.image, source)
+
+    canvas = modules.image.new("RGBA", (size, size), (0, 0, 0, 0))
+    inner = int(size * 0.88)
+    radius = int(inner * 0.24)
+    frame = _IconFrame(inner=inner, radius=radius, size=size)
+
+    artwork = square.resize((inner, inner), modules.image.Resampling.LANCZOS)
+    mask = modules.image.new("L", (inner, inner), 0)
+    draw = modules.draw.Draw(mask)
+    draw.rounded_rectangle((0, 0, inner - 1, inner - 1), radius=radius, fill=255)
+
+    shadow = _build_shadow(modules, frame)
+
+    layer = modules.image.new("RGBA", (inner, inner), (0, 0, 0, 0))
+    layer.paste(artwork, (0, 0), mask)
+
+    highlight = _build_highlight(modules, frame, mask)
+    shade = _build_shade(modules, frame, mask)
+    stroke = _build_stroke(modules, frame)
 
     offset = (size - inner) // 2
     canvas.alpha_composite(shadow, (offset, offset + max(1, size // 72)))

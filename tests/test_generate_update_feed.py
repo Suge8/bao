@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import cast
 
-from app.scripts.generate_update_feed import build_feed
+from app.scripts.generate_update_feed import FeedBuildRequest, build_feed
 
 
 def test_build_feed_generates_platform_payloads(tmp_path: Path) -> None:
@@ -29,10 +29,12 @@ def test_build_feed_generates_platform_payloads(tmp_path: Path) -> None:
     win_asset.write_bytes(b"win-update")
 
     feed = build_feed(
-        release_json=release_json,
-        assets_dir=assets_dir,
-        repo="Suge8/Bao",
-        channel="stable",
+        FeedBuildRequest(
+            release_json=release_json,
+            assets_dir=assets_dir,
+            repo="Suge8/Bao",
+            channel="stable",
+        )
     )
 
     channels = cast(dict[str, object], feed["channels"])

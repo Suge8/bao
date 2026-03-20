@@ -54,12 +54,12 @@ Name: "chinesesimplified"; MessagesFile: "..\resources\installer\ChineseSimplifi
 
 [Messages]
 english.WelcomeLabel1=Welcome to Bao
-english.WelcomeLabel2=Install Bao {#MyAppVersion} and start with one calm desktop workspace for chat, memory, tools, and gateway controls.%n%nAfter first launch, you can connect Telegram, Discord, WhatsApp, Slack, and more from inside the app.
+english.WelcomeLabel2=Install Bao {#MyAppVersion} and start with one calm desktop workspace for chat, memory, tools, and hub controls.%n%nAfter first launch, you can connect Telegram, Discord, WhatsApp, Slack, and more from inside the app.
 english.FinishedHeadingLabel=Bao is ready.
 english.FinishedLabel=Bao has been installed successfully.%n%nLaunch it from the Start menu or your desktop shortcut. Bao will create its config at ~/.bao/config.jsonc on first launch.
 english.BeveledLabel=Bao Desktop Setup
 chinesesimplified.WelcomeLabel1=欢迎使用 Bao
-chinesesimplified.WelcomeLabel2=安装 Bao {#MyAppVersion}，先把聊天、记忆、工具和网关控制收进一个更安静的桌面工作区。%n%n首次启动后，你可以再在应用内接入 Telegram、Discord、WhatsApp、Slack 等渠道。
+chinesesimplified.WelcomeLabel2=安装 Bao {#MyAppVersion}，先把聊天、记忆、工具和中枢控制收进一个更安静的桌面工作区。%n%n首次启动后，你可以再在应用内接入 Telegram、Discord、WhatsApp、Slack 等渠道。
 chinesesimplified.FinishedHeadingLabel=Bao 已准备就绪。
 chinesesimplified.FinishedLabel=Bao 已成功安装。%n%n你可以从开始菜单或桌面快捷方式启动它。首次启动时，Bao 会在 ~/.bao/config.jsonc 创建配置文件。
 chinesesimplified.BeveledLabel=Bao 桌面端安装程序

@@ -123,37 +123,43 @@ def test_chat_composer_click_focus_works_inside_text_input_region(qapp):
 
 
 def test_chat_view_composer_uses_capped_radius_and_clipping() -> None:
-    text = (QML_DIR / "ChatView.qml").read_text(encoding="utf-8")
+    chat_view_text = (QML_DIR / "ChatView.qml").read_text(encoding="utf-8")
+    composer_text = (QML_DIR / "ChatComposerBar.qml").read_text(encoding="utf-8")
+    strip_text = (QML_DIR / "ChatDraftAttachmentStrip.qml").read_text(encoding="utf-8")
 
-    assert "readonly property real composerFieldRadius: composerMinHeight / 2" in text
-    assert "radius: root.composerFieldRadius" in text
-    assert "clip: true" in text
-    assert 'objectName: "attachmentStrip"' in text
-    assert 'source: "../resources/icons/paperclip.svg"' in text
-    assert "event.matches(StandardKey.Paste)" in text
-    assert "chatService.pasteClipboardAttachment()" in text
-    assert 'GradientStop { position: 1.0; color: "#99000000" }' in text
-    assert "border.color: chipHover.containsMouse ? accent : borderSubtle" in text
-    assert "add: Transition" in text
-    assert 'border.color: root.hasDraftAttachments ? accent : "transparent"' in text
+    assert "readonly property real composerFieldRadius: composerMinHeight / 2" in chat_view_text
+    assert "radius: chatRoot.composerFieldRadius" in composer_text
+    assert "clip: true" in composer_text
+    assert 'objectName: "attachmentStrip"' in strip_text
+    assert 'source: "../resources/icons/paperclip.svg"' in composer_text
+    assert "event.matches(StandardKey.Paste)" in composer_text
+    assert "chatService.pasteClipboardAttachment()" in composer_text
+    assert 'GradientStop { position: 1.0; color: "#99000000" }' in strip_text
+    assert "border.color: chipHover.containsMouse ? accent : borderSubtle" in strip_text
+    assert "add: Transition" in strip_text
+    assert 'border.color: root.hasDraftAttachments ? accent : "transparent"' in composer_text
 
 
 def test_chat_view_reconcile_queue_uses_single_pending_request() -> None:
-    text = (QML_DIR / "ChatView.qml").read_text(encoding="utf-8")
+    text = (QML_DIR / "ChatMessagePaneLogic.js").read_text(encoding="utf-8")
 
-    assert "property var pendingPinnedReconcile: null" in text
     assert "reconcileQueued" not in text
     assert "queuedReconcileAnimated" not in text
-    assert "pendingPinnedReconcile = { animated: animated !== false }" in text
-    assert "var request = messageList.pendingPinnedReconcile" in text
-    assert "messageList.pendingPinnedReconcile = null" in text
+    assert "list.pendingPinnedReconcile = { animated: animated !== false }" in text
+    assert "var request = list.pendingPinnedReconcile" in text
+    assert "list.pendingPinnedReconcile = null" in text
+
+    pane_text = (QML_DIR / "ChatMessagePane.qml").read_text(encoding="utf-8")
+    assert "property var pendingPinnedReconcile: null" in pane_text
 
 
 def test_chat_view_uses_single_deferred_viewport_scheduler() -> None:
-    text = (QML_DIR / "ChatView.qml").read_text(encoding="utf-8")
+    text = (QML_DIR / "ChatMessagePaneLogic.js").read_text(encoding="utf-8")
 
-    assert "function scheduleDeferredViewportActions()" in text
-    assert "Qt.callLater(flushDeferredViewportActions)" in text
-    assert "property bool pendingSessionViewportReady: false" in text
-    assert "property var pendingViewportRestore: null" in text
-    assert "property bool deferredViewportFlushScheduled: false" in text
+    assert "function scheduleDeferredViewportActions(list)" in text
+    assert "Qt.callLater(function() { flushDeferredViewportActions(list, list.bottomPinnedFollower) })" in text
+
+    pane_text = (QML_DIR / "ChatMessagePane.qml").read_text(encoding="utf-8")
+    assert "property bool pendingSessionViewportReady: false" in pane_text
+    assert "property var pendingViewportRestore: null" in pane_text
+    assert "property bool deferredViewportFlushScheduled: false" in pane_text

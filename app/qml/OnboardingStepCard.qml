@@ -138,8 +138,8 @@ Rectangle {
 
             Rectangle {
                 Layout.alignment: Qt.AlignTop
-                width: 30
-                height: 30
+                Layout.preferredWidth: 30
+                Layout.preferredHeight: 30
                 radius: 15
                 color: root.badgeColor
                 border.color: root.badgeOutlineColor

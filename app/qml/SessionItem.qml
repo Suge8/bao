@@ -18,10 +18,12 @@ Rectangle {
     property bool isRunning: false
     property int childIndent: 0
     property bool useExternalActiveHighlight: false
+    property bool pooledByListView: false
     readonly property real deleteHitZoneWidth: deleteBtn.width + deleteBtn.anchors.rightMargin
     readonly property string deleteIconSource: isDark
                                                ? "../resources/icons/sidebar-close.svg"
                                                : "../resources/icons/sidebar-close-light.svg"
+    readonly property bool animateRunningBadge: root.isRunning && !root.pooledByListView
     signal selected()
     signal deleteRequested()
 
@@ -97,7 +99,7 @@ Rectangle {
 
             Rectangle {
                 id: runningBadge
-                visible: root.isRunning
+                visible: root.animateRunningBadge
                 width: 8
                 height: 8
                 radius: 4
@@ -110,14 +112,14 @@ Rectangle {
                 scale: 0.92
 
                 SequentialAnimation on opacity {
-                    running: root.isRunning
+                    running: root.animateRunningBadge
                     loops: Animation.Infinite
                     NumberAnimation { from: 0.46; to: 1.0; duration: 900; easing.type: Easing.InOutQuad }
                     NumberAnimation { from: 1.0; to: 0.46; duration: 900; easing.type: Easing.InOutQuad }
                 }
 
                 SequentialAnimation on scale {
-                    running: root.isRunning
+                    running: root.animateRunningBadge
                     loops: Animation.Infinite
                     NumberAnimation { from: 0.88; to: 1.14; duration: 900; easing.type: Easing.InOutQuad }
                     NumberAnimation { from: 1.14; to: 0.88; duration: 900; easing.type: Easing.InOutQuad }
